@@ -365,18 +365,18 @@ curl -X POST http://localhost:2000/eve/v1/session/wrun_A \
 
 `sessionId` 是唯一入口，后续所有消息、取消、清空都带着它。第 9 章把这条协议讲全。
 
-## 2.9 常见坑
+## 2.9 常见注意事项
 
-**坑：`eve init` 之后 `npm run dev` 报模型鉴权失败。**
+**注意：`eve init` 之后 `npm run dev` 报模型鉴权失败。**
 脚手架没有配置凭据。在 TUI 里输入 `/model` 走登录流程，或把 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 写进 `.env`。用 Vercel AI Gateway 的模型还需要 `AI_GATEWAY_API_KEY`。
 
-**坑：改了 `agent.ts` 没生效。**
+**注意：改了 `agent.ts` 没生效。**
 模型、`build.externalDependencies` 这类配置在启动时读取，改完要重启 dev server。`instructions.md` 和工具文件是热加载的，两者不一样。
 
-**坑：在 `agent/` 里放业务代码。**
+**注意：在 `agent/` 里放业务代码。**
 `agent/lib/` 只放 agent 自己用的辅助代码，它不会被复制进沙箱。前端代码、数据库迁移、普通后端接口都放 `agent/` 外面。
 
-**坑：以为 `instructions.md` 能当流程文档用。**
+**注意：以为 `instructions.md` 能当流程文档用。**
 写两百行排障步骤进去，结果是每轮都付这份 token，而且模型经常忽略中间的条目。长流程放技能。
 
 ## 2.10 练习

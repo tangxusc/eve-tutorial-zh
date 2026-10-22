@@ -375,24 +375,24 @@ for await (const event of sessions.attach(sessionId).stream({
 
 注意：`sessions` 读任何 ID 都**不做通道鉴权**，传进来的 ID 必须先校验归属。
 
-## 9.11 常见坑
+## 9.11 常见注意事项
 
-**坑：只看 `turn.completed` 就以为拿到了完整回复。**
+**注意：只看 `turn.completed` 就以为拿到了完整回复。**
 一个 turn 里可能有多次 `message.completed`。最终答复要取最后一个 `finishReason: "stop"` 的块，或直接看 `turn.message`（客户端已处理）。
 
-**坑：重连后重复处理事件。**
+**注意：重连后重复处理事件。**
 按 `meta.id` 去重。不要用「内容相同」判断。
 
-**坑：把 `turn.waiting` 当成结束。**
+**注意：把 `turn.waiting` 当成结束。**
 它表示 turn 还开着，在等人或在等任务。收到它就断开连接会丢掉后续事件。
 
-**坑：`clear` 之后以为能重新触发动态指令。**
+**注意：`clear` 之后以为能重新触发动态指令。**
 不会重跑指令定义或解析器。
 
-**坑：用 `reset` 想「重开一段对话」。**
+**注意：用 `reset` 想「重开一段对话」。**
 `reset` 是终止，ID 作废。想在同一会话里换话题用 `clear`，想全新会话就新建。
 
-**坑：匿名调用带 `operationId`。**
+**注意：匿名调用带 `operationId`。**
 不允许。幂等创建需要已认证的 principal。
 
 ## 9.12 练习

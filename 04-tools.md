@@ -514,27 +514,27 @@ export default defineTool({
 
 要点：**取数在应用侧，计算在沙箱侧**。数据库凭据不进入沙箱，只有算完需要的数值进去。第 5 章详细讲。
 
-## 4.12 常见坑
+## 4.12 常见注意事项
 
-**坑：工具被调用两次，邮件发了两封。**
+**注意：工具被调用两次，邮件发了两封。**
 step 重跑。加幂等键，或挂 `always()` 审批。
 
-**坑：description 写成中文，模型却总是调错。**
+**注意：description 写成中文，模型却总是调错。**
 不是语言问题，是信息不足。补上「什么时候不该用」和返回什么。
 
-**坑：`inputSchema` 用了 `z.any()`。**
+**注意：`inputSchema` 用了 `z.any()`。**
 模型会传任意结构，你的 `execute` 里到处是 `undefined`。字段尽量收紧：`z.enum`、`.min()`、`.max()`。
 
-**坑：工具返回了 `Date` 对象。**
+**注意：工具返回了 `Date` 对象。**
 不可 JSON 序列化，会在持久化边界出问题。`toISOString()` 之后再返回。
 
-**坑：在工具里 `console.log` 大对象。**
+**注意：在工具里 `console.log` 大对象。**
 日志会进 trace，体积很大。要调试用 `eve logs show`，打完删掉。
 
-**坑：把 `ctx.session.auth.current` 当成必然存在。**
+**注意：把 `ctx.session.auth.current` 当成必然存在。**
 匿名调用、定时任务、内部运行时都可能是 `null`。取属性前先判空。
 
-**坑：以为 `toModelOutput` 能省钱。**
+**注意：以为 `toModelOutput` 能省钱。**
 它省的是**上下文 token**，不省工具本身的执行成本。真正的成本控制靠 `limits`（第 6 章）和收窄输出。
 
 ## 4.13 练习

@@ -780,33 +780,33 @@ export default defineDynamic({
 
 同样是「查数据」，三种凭据的边界完全不同：`linear` 看到的是**这个人**的 issue，`crm` 看到的是**公司**的客户，`accounts` 看到的是**这个租户**的数据仓库。
 
-## 13.11 常见坑
+## 13.11 常见注意事项
 
-**坑：模型说「我没有 Linear 工具」。**
+**注意：模型说「我没有 Linear 工具」。**
 连接工具不进工具列表。指令里写一句「需要 Linear 数据时先用 `eve__search` 查 `linear__`」。
 
-**坑：`tools.allow` 和 `tools.block` 同时写。**
+**注意：`tools.allow` 和 `tools.block` 同时写。**
 只能选一个。
 
-**坑：`credentialOwner: "user"` 但通道是匿名的。**
+**注意：`credentialOwner: "user"` 但通道是匿名的。**
 报 `principal_required`。先让通道认证出 `principalType: "user"`。
 
-**坑：定时任务用用户作用域连接。**
+**注意：定时任务用用户作用域连接。**
 定时任务没有终端用户，必然失败。改 app 作用域，或让任务通过用户认证的通道派发。
 
-**坑：`instanceKey` 用了 token 或 URL。**
+**注意：`instanceKey` 用了 token 或 URL。**
 必须是稳定、非密钥的标识。用账号 ID 或租户 ID。
 
-**坑：审批策略里用 `toolName === "delete_issue"`。**
+**注意：审批策略里用 `toolName === "delete_issue"`。**
 连接工具名带前缀。用 `endsWith`。
 
-**坑：以为 MCP 结果能用 `toModelOutput` 收窄。**
+**注意：以为 MCP 结果能用 `toModelOutput` 收窄。**
 MCP 连接没有这个能力。从服务端解决，或换自己写的工具。
 
-**坑：信任 `readOnlyHint` 就放开所有读操作。**
+**注意：信任 `readOnlyHint` 就放开所有读操作。**
 注解是服务端自己声明的。对不可信服务端不能当安全保证。
 
-**坑：自建 OAuth 以为 eve 会存 token。**
+**注意：自建 OAuth 以为 eve 会存 token。**
 不会。`completeAuthorization` 里自己存，`getToken` 里自己读。
 
 ## 13.12 练习

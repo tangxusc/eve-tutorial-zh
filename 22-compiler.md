@@ -434,7 +434,7 @@ export async function stageDevelopmentRuntimeArtifactsSnapshot(
 
 **为什么改了代码老会话不变？** dev 下每次重建生成新快照，老会话绑定的是旧快照。新会话用新快照。想看新代码，开个新会话，或者看 `current.json` 指向的 snapshot 时间戳。
 
-## 22.9 五个坑
+## 22.9 五个注意事项
 
 1. **`compiled-agent-manifest.json` 不是给人读的。** 它包含完整的内联 schema、每个工具的输出整形配置、每个通道的路由表。看结构可以，别指望通读。
 2. **改 `agent.ts` 会触发全量重编译，改 `instructions.md` 也会。** 因为 markdown 内容被内联进 discovery manifest，hash 变了。

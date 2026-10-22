@@ -268,7 +268,7 @@ if (intake.kind === "stop") return intake.result;
 
 所以「step 数」约等于「模型调用数 + 收尾」。看到事件流里 step 很多，说明模型在反复调工具，不是框架有问题。
 
-## 25.7 五个坑
+## 25.7 五个注意事项
 
 1. **工具参数错误不会让 turn 失败。** 它变成 `isError: true` 的 tool result，模型自己重试。想看真实失败，查 `turn.failed`，不是 `action.result`。
 2. **一个 turn 的 step 数 = 模型调用数 + 辅助 step。** 20 轮工具调用就是 20 个 step，每个都写检查点。长任务的开销主要在序列化上。

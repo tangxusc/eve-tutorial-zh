@@ -863,42 +863,42 @@ export default defineTool({
 2. `response` 限制谁能批——不能只靠「发起人」。
 3. `execute` 传幂等键——审批不能防重放。
 
-## 11.13 常见坑
+## 11.13 常见注意事项
 
-**坑：以为不写 `approval` 就是安全的。**
+**注意：以为不写 `approval` 就是安全的。**
 默认 `never()`。危险工具必须显式声明。
 
-**坑：把 `approval` 写成对象却忘了 `request`。**
+**注意：把 `approval` 写成对象却忘了 `request`。**
 对象形态里 `request` 是必填的。只想要文案？`request: always()` 也得写。
 
-**坑：审批之后模型「忘了」之前的上下文。**
+**注意：审批之后模型「忘了」之前的上下文。**
 不会。审批是停泊不是重启，`turnId` 和上下文都保留。如果你看到上下文丢失，多半是别的地方 clear 或压缩了。
 
-**坑：在共享 Slack 线程里，任何人都能批准。**
+**注意：在共享 Slack 线程里，任何人都能批准。**
 默认只有发起人能批。如果自定义了 `response` 策略又一律放行，就变成谁都能批。
 
-**坑：用审批代替幂等。**
+**注意：用审批代替幂等。**
 重放时审批已通过，工具会再跑。两者都要。
 
-**坑：`ctx.approval` 在 workflow 工具里取。**
+**注意：`ctx.approval` 在 workflow 工具里取。**
 workflow 工具不接收 `ctx.approval`。需要审批人身份就用 `defineTool`。
 
-**坑：`once()` 以为只弹一次。**
+**注意：`once()` 以为只弹一次。**
 同一个 step 里并发发起三个调用时，三个请求都会弹。授权要等所有已存在的待批请求都解决之后才生效。
 
-**坑：在 workflow body 里调 `ctx.getSandbox()`。**
+**注意：在 workflow body 里调 `ctx.getSandbox()`。**
 workflow 上下文没有沙箱。要跑命令就写普通工具。
 
-**坑：用 `yield` 当等待。**
+**注意：用 `yield` 当等待。**
 `yield` 只发进度快照，不会挂起。要挂起就 `await sleep(...)` 或 `await ctx.ask(...)`。
 
-**坑：在 `"use step"` 里调 `ctx.ask`。**
+**注意：在 `"use step"` 里调 `ctx.ask`。**
 step 拿到的是窄上下文，没有 `ask`。提问要写在 workflow 主体里。
 
-**坑：定时任务调用了要审批的工具，任务一直挂着。**
+**注意：定时任务调用了要审批的工具，任务一直挂着。**
 markdown 定时任务会直接失败。handler 形式的任务看它发到哪个通道。
 
-**坑：`ask_question` 的选项写成四个以上。**
+**注意：`ask_question` 的选项写成四个以上。**
 协议建议两到三个。太多选项在文本通道上无法渲染成可用 UI。
 
 ## 11.14 练习

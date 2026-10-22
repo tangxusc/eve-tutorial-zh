@@ -216,7 +216,7 @@ v1 的会话在等审批，run 处于活跃状态。部署 v2 后，v2 的 world
 2. 你用了 `routesToOwnerDeployment` 返回 true 的 world，但实际路由没生效。
 3. 版本判定读不到 `EVE_VERSION_ATTRIBUTE`（run 是很老的版本创建的，没写这个属性）。
 
-## 29.7 五个坑
+## 29.7 五个注意事项
 
 1. **包装必须在 `world.start()` 之前。** 顺序错了，队列可能已经投递了 retired run。
 2. **版本检查只比 major 和预发布标签。** 补丁版本不兼容不会被拦，只能靠运行时错误暴露。

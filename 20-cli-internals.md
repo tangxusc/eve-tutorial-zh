@@ -99,7 +99,7 @@ if (await exists(options.cliEntrypointPath)) {
 
 顺序不能反：先 flush 再 exit。
 
-**坑**：`flushWritable` 只对 stdout/stderr 的 `write` 回调做等待，不覆盖 `fs.writeSync` 之类的同步写。如果你在命令里用 `process.stdout.fd` 直接写，这部分不受保护。
+**注意**：`flushWritable` 只对 stdout/stderr 的 `write` 回调做等待，不覆盖 `fs.writeSync` 之类的同步写。如果你在命令里用 `process.stdout.fd` 直接写，这部分不受保护。
 
 ## 20.2 命令怎么被分发
 
@@ -526,7 +526,7 @@ await waitForShutdownSignal({ close: () => server.close(), wait: () => server.wa
 
 **为什么 Ctrl-C 要按两次？** 第一次给优雅关闭 900ms，第二次直接 `exit(130)`。子进程那侧靠 IPC `disconnect` 感知父进程死亡，即使父进程被 `kill -9` 也能退。
 
-另外三个坑，一并记下：
+另外三处需要注意：
 
 1. **`eve dev --no-ui` 和 `eve dev` 对「已有 server」的处理不同。** 前者传 `existing: "reject"`，端口被占直接失败；后者传 `existing: "attach-if-unconfigured"`，会尝试附着到已有实例。CI 里用 `--no-ui` 时要自己保证端口空闲。
 2. **`kill -9` 父进程后，子进程靠 `disconnect` 退出，但沙箱资源要等下次启动才清理。** `recordCleanupIntent` 写的 `.eve/dev-cleanup-intent.<runId>.json` 留在磁盘上，`reconcileCleanupIntents` 在下一次 `eve dev` 启动时处理。

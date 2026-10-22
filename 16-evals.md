@@ -501,30 +501,30 @@ export default defineEvalConfig({
 
 配置里的报告器观察整轮运行，所以一个 `Braintrust()` 放在这里就够了，不用每个 eval 加一遍。
 
-## 16.12 常见坑
+## 16.12 常见注意事项
 
-**坑：`evals/` 下没有 `evals.config.ts`。**
+**注意：`evals/` 下没有 `evals.config.ts`。**
 评测跑不起来。空对象也要有。
 
-**坑：断言 `eve__tool` 或 `eve__skill`。**
+**注意：断言 `eve__tool` 或 `eve__skill`。**
 通过目录工具发的调用，报告的是**被调用条目**的名字（`linear__list_issues`）或技能加载。断言要写条目名。
 
-**坑：`t.calledTool` 和 `t.usedNoTools` 同时用。**
+**注意：`t.calledTool` 和 `t.usedNoTools` 同时用。**
 互斥。选一个。
 
-**坑：`t.succeeded()` 就以为覆盖了质量。**
+**注意：`t.succeeded()` 就以为覆盖了质量。**
 它只检查「没失败、没卡住」。内容正确性要另外断言。
 
-**坑：judge 没有阈值，以为它会让评测失败。**
+**注意：judge 没有阈值，以为它会让评测失败。**
 judge 默认 soft 且无阈值，记录但不判定。要卡就 `.atLeast()` 并跑 `--strict`。
 
-**坑：mock 模型用在生产 agent 上。**
+**注意：mock 模型用在生产 agent 上。**
 `mockModel` 是 fixture 专用。生产 agent 的模型改成 mock 就永远返回固定文本。
 
-**坑：工具桩匹配写得太宽。**
+**注意：工具桩匹配写得太宽。**
 `match` 不写会按顺序消费所有调用，容易在第二次调用时拿到意外结果。按输入收窄。
 
-**坑：改了提示词只跑本地 smoke。**
+**注意：改了提示词只跑本地 smoke。**
 CI 里要跑 `--strict`，否则 soft 退化永远不拦。
 
 ## 16.13 练习

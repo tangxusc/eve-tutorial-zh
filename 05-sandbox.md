@@ -156,7 +156,7 @@ export const environment = DockerSandbox.environment(); // 默认镜像
 export default defineSandbox(() => environment.open({ networkPolicy: "deny-all" }));
 ```
 
-**这是最容易踩的坑**：`just-bash` 跑不了 Python，也装不了包。你在笔记本上装了 Python 不会让沙箱里有 Python。要让模型跑 Python，必须上 Docker / microsandbox / Vercel Sandbox。
+**这一点最容易忽略**：`just-bash` 跑不了 Python，也装不了包。你在笔记本上装了 Python 不会让沙箱里有 Python。要让模型跑 Python，必须上 Docker / microsandbox / Vercel Sandbox。
 
 用 Docker 前先确认守护进程可用：
 
@@ -464,30 +464,30 @@ export const AcmeSandbox = defineSandboxProvider<
 - 进程重启只调 `resume()`，必须能接回已有原生资源；接不回来就失败，不要重建（重建会丢副作用）。
 - `onSessionEnd()` 做幂等清理，不要依赖活句柄。
 
-## 5.11 常见坑
+## 5.11 常见注意事项
 
-**坑：以为有 Python，结果 `python3: not found`。**
+**注意：以为有 Python，结果 `python3: not found`。**
 你用的是 `just-bash`。换 Docker 或 Vercel Sandbox。
 
-**坑：`prepare` 里 `sudo apt-get` 失败，但没报错。**
+**注意：`prepare` 里 `sudo apt-get` 失败，但没报错。**
 没检查 `exitCode`。每条命令都要检查。
 
-**坑：改了 workspace 种子，老会话看不到。**
+**注意：改了 workspace 种子，老会话看不到。**
 种子只在新环境代次生效。开新会话。
 
-**坑：`sandbox.run()` 失败但代码继续跑。**
+**注意：`sandbox.run()` 失败但代码继续跑。**
 它不抛异常。必须判断 `exitCode !== 0`。
 
-**坑：把数据库密码写进沙箱脚本。**
+**注意：把数据库密码写进沙箱脚本。**
 模型能 `read_file` 那个脚本。取数在应用侧做。
 
-**坑：`deny-all` 之后 `prepare` 装不了包。**
+**注意：`deny-all` 之后 `prepare` 装不了包。**
 准备阶段需要出网。要么保持 `allow-all` 准备完再收紧，要么用白名单。
 
-**坑：图表 PNG 超过 1 MiB 塞进工具结果。**
+**注意：图表 PNG 超过 1 MiB 塞进工具结果。**
 工具结果随会话事件持久化，会拖慢一切。控制在 1 MiB 内，或改走对象存储。
 
-**坑：以为沙箱是安全边界，其实用 `just-bash`。**
+**注意：以为沙箱是安全边界，其实用 `just-bash`。**
 它没有进程隔离。真正跑不可信代码必须上容器或 VM。
 
 ## 5.12 练习

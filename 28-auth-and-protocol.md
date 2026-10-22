@@ -350,7 +350,7 @@ async cancel(reason) {
 
 想看是哪个策略拒的，开 `EVE_LOG_LEVEL=debug`，日志里有 `authenticator` 字段。
 
-## 28.7 五个坑
+## 28.7 五个注意事项
 
 1. **`trustedForwarders` 不配等于「忽略转发身份」，不是「拒绝」。** 请求照常处理，只是没有转发来的身份。
 2. **`none()` 放在数组中间会让后面的策略永远不执行。** 它返回 truthy，遍历立即停止。

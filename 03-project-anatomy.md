@@ -260,21 +260,21 @@ agent/tools/
 
 显式 `import`、沙箱 workspace 文件、打包技能的附属文件不受这条规则影响。
 
-## 3.8 常见坑
+## 3.8 常见注意事项
 
-**坑：在 `agent/` 根目录同时放了 `instructions.md` 和 `instructions.ts`。**
+**注意：在 `agent/` 根目录同时放了 `instructions.md` 和 `instructions.ts`。**
 编译错误。二选一。
 
-**坑：把技能写成了工具期望的行为。**
+**注意：把技能写成了工具期望的行为。**
 技能只加文本，不加执行能力。技能里写「调用 `read_logs` 工具」是可以的（工具本来就在），写「运行这段 Python」不行——除非有 `bash` 工具且沙箱可用。
 
-**坑：`lib/` 里的文件在沙箱里找不到。**
+**注意：`lib/` 里的文件在沙箱里找不到。**
 设计如此。要共享给模型看，走 workspace 种子。
 
-**坑：workspace 成员目录里放了 `package.json`。**
+**注意：workspace 成员目录里放了 `package.json`。**
 `eve info` 里看不到这个 agent，且没有明显报错。
 
-**坑：改了目录名以为只是重命名。**
+**注意：改了目录名以为只是重命名。**
 工具名、技能名、评测断言、审批策略里引用的名字全都跟着变。改名是 breaking change。
 
 ## 3.9 练习

@@ -507,30 +507,30 @@ export default mcpChannel({
 
 一个 agent 可以同时有多个通道和多个连接，互不影响。
 
-## 14.9 常见坑
+## 14.9 常见注意事项
 
-**坑：上线后发现谁都能访问。**
+**注意：上线后发现谁都能访问。**
 脚手架带 `placeholderAuth()`，它在生产返回 401。但如果你删掉了 `channels/eve.ts` 或改成了 `localDev()`，生产就裸奔了。上线前用无凭据的 `curl` 打一次 `POST /eve/v1/session`，必须 401。
 
-**坑：Slack 里 @ 了但没反应。**
+**注意：Slack 里 @ 了但没反应。**
 事件订阅没开 `app_mention`，或 Request URL 指错，或部署在 Deployment Protection 后面而 Slack 过不去。
 
-**坑：Slack 里审批按钮点不动。**
+**注意：Slack 里审批按钮点不动。**
 Interactivity 的 Request URL 没配。审批按钮走的是交互回调。
 
-**坑：把 bot token 写进代码。**
+**注意：把 bot token 写进代码。**
 走环境变量或 Vercel Connect。
 
-**坑：自定义通道里 `from(address)` 用错地址粒度。**
+**注意：自定义通道里 `from(address)` 用错地址粒度。**
 地址粒度决定「什么算同一段对话」。Slack 用线程级，Discord 用频道级，选错会让不同人的对话串在一起。
 
-**坑：用 `attachSession` 处理平台消息。**
+**注意：用 `attachSession` 处理平台消息。**
 它是固定 ID 句柄，不会跟随地址变化。平台消息应该用 `from(address)`。
 
-**坑：以为通道鉴权能保护工具。**
+**注意：以为通道鉴权能保护工具。**
 通道鉴权只决定「谁能发消息」。工具级权限要用 `approval` 和工具内的 `ctx.session.auth` 判断。
 
-**坑：`metadata(state)` 返回整个 state。**
+**注意：`metadata(state)` 返回整个 state。**
 内部计数器、临时字段都会泄漏给解析器。只返回需要暴露的字段。
 
 ## 14.10 练习

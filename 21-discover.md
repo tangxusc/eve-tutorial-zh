@@ -122,7 +122,7 @@ Ignoring unsupported directory "foo/" in the agent root.
 
 这条 warning 默认不显示——`reportDiscoverWarnings` 只在编译时 `console.warn`，而 `eve dev` 的启动输出会把它刷过去。所以「我建了个 `prompts/` 目录，为什么没生效」的答案永远是：它被忽略了，没有任何东西读它。
 
-### 一个大小写不一致的坑
+### 一处大小写不一致
 
 `instructions.md` 和 `system.md` 用 `toLowerCase()` 比较，`agent.ts`、`memory.ts` 用精确匹配：
 
@@ -340,7 +340,7 @@ if (candidates.moduleFileNames.length > 1) {
 1. `schedules/daily.md` 和 `schedules/daily.ts` 同时存在 → `discover/slot-collision`
 2. `tools/read_logs.ts` 和 `tools/read_logs.js` 同时存在 → `discover/module-slot-collision`
 
-第二种最容易踩：编辑器自动生成 `.js`（比如 `tsc` 没配 `noEmit`），或者从别处拷文件时带了一份编译产物。
+第二种最常见：编辑器自动生成 `.js`（比如 `tsc` 没配 `noEmit`），或者从别处拷文件时带了一份编译产物。
 
 诊断信息里会列出所有冲突文件名，但**不会告诉你要保留哪个**。它只说「这几个文件撞了」。
 
@@ -485,7 +485,7 @@ export function classifyLocalSubagentEntry(
 
 **`agent/prompts/` 为什么完全没反应？** 它不在分类表里，被当成未知目录，只生成一条 warning。而 warning 在 `eve dev` 的启动日志里会被刷过去。
 
-## 21.11 五个坑
+## 21.11 五个注意事项
 
 1. **未知目录静默忽略。** 建了 `prompts/`、`context/`、`docs/` 都不会报错，只是没人读。唯一的线索是编译时的 warning，而它默认被启动日志刷掉。
 2. **`agent.ts` 大小写敏感，`instructions.md` 不敏感。** 见 21.2 的表。
