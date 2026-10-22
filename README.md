@@ -1,11 +1,11 @@
 # eve 中文教程
 
-本仓库是 [eve](https://eve.dev) 的中文教程，只有文档，没有可执行代码。18 章正文加 3 个附录，从 `eve init` 讲到上线。
+本仓库是 [eve](https://eve.dev) 的中文教程，只有文档，没有可执行代码。29 章正文加 3 个附录：前 18 章从 `eve init` 讲到上线，第 19 到 29 章是源码解析，按一个 prompt 的完整旅程走一遍实现。
 
 写给要动手做事的人。每一章都能跑起来，讲清楚「为什么这样设计」，也讲清楚哪里会踩坑。
 
 - 依据：[eve.dev](https://eve.dev) 官方文档与 [github.com/vercel/eve](https://github.com/vercel/eve) 源码，逐条对照 `eve@0.81.1` 的类型定义（`dist/src/**/*.d.ts`）与本地 `node_modules/eve/docs/`
-- 对照版本：`eve@0.81.x`（beta）。API 仍在变，升级后先看 `node_modules/eve/CHANGELOG.md` 和本地 `node_modules/eve/docs/`，那份文档跟安装版本严格对齐。
+- 基于版本：`eve@0.81.1`（beta）。`0.81.x` 小版本之间 API 基本一致，行为可能有差异。升级后先看 `node_modules/eve/CHANGELOG.md` 和本地 `node_modules/eve/docs/`，那份文档跟安装版本严格对齐。
 - 示例项目：全教程共用一个「值班助手 opsbot」，从一句话提示词长到带工具、沙箱、审批、子代理、Slack、定时任务和评测的完整 agent。
 
 ### 相对 0.79 的行为变化
@@ -72,6 +72,30 @@
 | [16 评测](16-evals.md) | `defineEval`、断言、judge、tool stub | 改提示词前先有回归网 |
 | [17 前端与部署](17-frontend-and-deploy.md) | `useEveAgent`、`withEve`、Vercel / 自托管 | 交付一个真实可用的应用 |
 | [18 进阶与上线检查](18-advanced-and-production.md) | 动态能力、扩展包、远程 agent、安全与成本 | 上线前逐条过一遍 |
+
+### 第四部分：源码解析
+
+每章从一个具体问题出发，讲到代码里哪一行让它成立。按「一个 prompt 的完整旅程」组织，不按目录结构。
+
+读实现用 GitHub 对应 tag 的 `src`，读契约用本地 `.d.ts`——发布包里的 `.js` 压缩成单行，读不了。
+
+| 章节 | 从一个问题出发 | 讲清楚什么 |
+| --- | --- | --- |
+| [19 怎么读 eve 的源码](19-reading-the-source.md) | 加了一行日志，为什么没出现？1816 个文件从哪读起 | 三个源码来源的坑、`#` 导入的三层信息、按执行时机分层、三个验证手段 |
+| [20 CLI 启动链路](20-cli-internals.md) | 第一次跑命令为什么卡十几秒？Ctrl-C 为什么要按两次 | `bin/eve.js` 的两道关、命令分发、`eve dev` 为什么 fork 子进程、三级关闭 |
+| [21 discover](21-discover.md) | 文件放进 `agent/` 为什么毫无反应 | 根目录分类表、扩展名与排除、递归槽位、名字推导、三种冲突、诊断级别 |
+| [22 compiler](22-compiler.md) | 写 `tools/bash.ts` 会不会冲突？改了代码老会话为什么不变 | 六个产物、四层候选优先级、`shadowed`、module map 的两种加载、dev 快照 |
+| [23 runtime](23-runtime.md) | 工具里的计数器为什么串会话 | 声明与实现分离、工具装配的三个分支、模块级状态共享、context key |
+| [24 workflow](24-workflow.md) | 同一封邮件为什么发了两遍 | 会话就是一个 workflow、step 的七阶段、检查点存什么、重放边界 |
+| [25 harness](25-harness.md) | 一次问答为什么有三个 `step.started` | `stopWhen: isStepCount(1)`、工具错误回灌、压缩在调用前、停泊与续跑 |
+| [26 默认 eve channel](26-eve-channel.md) | 401 到底是谁拒的？重连为什么收到重复事件 | 23 条路由、鉴权不是中间件、建会话的十一道关、`startIndex` 与 tail index |
+| [27 channel 抽象](27-channel-abstraction.md) | 接内部 webhook，要写多少代码 | `defineChannel` 的三个产物、路由 handler 的十一个参数、adapter 持久状态、Slack 的 1529 行 |
+| [28 鉴权与协议](28-auth-and-protocol.md) | 401 分不清是没带 token 还是密码错 | `routeAuth` 的遍历语义、`http-basic` 全文、转发身份的信任边界、37 个事件类型 |
+| [29 world](29-world.md) | 部署新版本后，老会话为什么报 `CORRUPTED_EVENT_LOG` | `installWorkflowWorld` 的四步、版本兼容、stranded run 的三类处理 |
+
+每章的结构是固定的：**一个具体场景 → 这条链路上每一站做了什么 → 回到场景给出答案 → 坑 → 练习**。代码块标了文件路径和行号，与 `eve@0.81.1` 逐行对照过。
+
+完整规划（每章要读的源码文件、关键片段、验证实验）见 [SOURCE-READING-PLAN.md](SOURCE-READING-PLAN.md)。
 
 ### 附录
 
