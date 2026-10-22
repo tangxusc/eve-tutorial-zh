@@ -8,28 +8,6 @@
 - 基于版本：`eve@0.81.1`（beta）。`0.81.x` 小版本之间 API 基本一致，行为可能有差异。升级后先看 `node_modules/eve/CHANGELOG.md` 和本地 `node_modules/eve/docs/`，那份文档跟安装版本严格对齐。
 - 示例项目：全教程共用一个「值班助手 opsbot」，从一句话提示词长到带工具、沙箱、审批、子代理、Slack、定时任务和评测的完整 agent。
 
-### 相对 0.79 的行为变化
-
-如果你手上的项目还钉在 0.79，下面这些差异会影响教程里的代码和结论。已在对应章节标注。
-
-| 变化 | 出现在 | 章节 |
-| --- | --- | --- |
-| `ctx.approval.responder` 可用：能读审批人身份，也能用 `responder.getToken()` 取他的凭据 | 0.79.1 | 4、11 |
-| 审批的第一个答案生效，重复提交被丢弃（双击不会再覆盖已做的决定） | 0.81 | 11 |
-| 登录中断的调用在回调后自己续跑，不再多一次模型调用；`retryable: false` 失败不再在同一 turn 重复弹登录 | 0.81 | 13 |
-| MCP 凭据每次请求前解析，`expiresAt` 过期即换；服务端 401 会驱逐缓存并重试一次，403 不重试 | 0.81 | 13 |
-| MCP 连接可以订阅服务端事件（`experimental_events`） | 0.80 | 13 |
-| 部署/压缩交接期间消息立即接受、地址始终有主，不再返回 `409 session_not_ready`；需要 world 具备 `hookForceClaim` / `hookRetention` | 0.81 | 10 |
-| run 数据保留默认由追踪策略推导；私有会话在开发环境外默认结束即删 | 0.80 | 10、18 |
-| 读超出保留期的会话流返回 `410 session_expired` | 0.79.1 | 9、附录 A |
-| `useEveAgent` 新增 `followIdle: false`，空闲时关流 | 0.79.1 | 17 |
-| 模型支持 AI Gateway 的会话亲和，可用 `sessionAffinity: false` 关掉 | 0.81 | 2 |
-| OpenAPI path 参数拒绝 `.` 和 `..` | 0.80.1 | 13 |
-| 评测可以断言推理内容（`reasoning.completed`） | 文档 0.81 | 16 |
-| 扩展的 git 包支持 `github.authorize`（0.80）/ `github.attribution`（0.81） | 0.80、0.81 | 18 |
-
-核对方法：`node_modules/eve/dist/src/**/*.d.ts` 是最终事实来源；文档与类型冲突时以类型为准，再翻 CHANGELOG 确认是不是版本差异。教程里所有 `import ... from "eve/..."` 都在包的 `exports` 里存在，具名导出都能在对应 `.d.ts` 里找到。
-
 ## 先读这三段
 
 **eve 是什么。** 一个「文件系统即配置」的 agent 框架。`agent/` 目录下的文件名就是能力名：`tools/read_logs.ts` 就是 `read_logs` 工具，`skills/triage.md` 就是 `triage` 技能。没有注册表，没有 DSL，没有手写的 agent 循环。你只写能力，循环由框架跑。
