@@ -8,6 +8,7 @@
 
 ```ts
 // agent/tools/counter.ts
+// 模块级变量：整个进程只有一份，所有会话共用（这就是计数器串号的原因）
 let count = 0;
 
 export default defineTool({
@@ -35,13 +36,16 @@ runtime 把它们合成一个对象：
 ```ts
 // packages/eve/src/runtime/resolve-agent.ts
 interface ResolveAgentInput {
-  manifest: CompiledAgentNodeManifest | CompiledAgentResources;
-  moduleMap: CompiledModuleMap;
+  manifest: CompiledAgentNodeManifest | CompiledAgentResources;   // 声明：编译产物
+  moduleMap: CompiledModuleMap;                                   // 实现：模块命名空间
   nodeId?: string;
 }
 
 export async function resolveAgent(input: ResolveAgentInput): Promise<ResolvedAgent> {
+  // 技能不加载模块，只把元数据搬过来
   const resolvedSkills = input.manifest.skills.map((skill) => ({ ... }));
+
+  // 通道和工具要真的加载模块：并发解析，顺序不影响结果
   const resolvedChannels = await Promise.all(
     input.manifest.channelRoutes.effective.map((channelEntry) =>
       resolveChannelDefinition(channelEntry, input.moduleMap, input.nodeId),
@@ -88,6 +92,7 @@ export async function resolveToolDefinition(
   nodeId: string | undefined,
   owner: AgentSourceOwner,
 ): Promise<ResolvedToolDefinition> {
+  // 分支一：不需要本地 execute 的工具，压根不加载模块
   if (!definition.hasExecute) {
     const resolved: ResolvedToolDefinition = {
       availableInSubagents: definition.availableInSubagents,
@@ -102,11 +107,13 @@ export async function resolveToolDefinition(
       sourceId: definition.sourceId,
       sourceKind: "module",
     };
+    // provider-tool 再包一层：执行发生在厂商那边，本地只留声明
     return definition.behavior?.handling?.kind === "provider-tool"
       ? frameworkTool(resolved)
       : resolved;
   }
 
+  // 分支二：普通工具，按 sourceId 从 module map 取命名空间
   const resolvedExportValue = await loadResolvedModuleExport({
     definition,
     kindLabel: "tool",
@@ -115,11 +122,13 @@ export async function resolveToolDefinition(
   });
   const resolvedRecord = expectObjectRecord(resolvedExportValue, describe(definition, "to return an object"));
 
+  // workflow-tool 的 execute 永远是 undefined：执行交给 workflow，不在这里跑
   const execute =
     definition.behavior?.handling?.kind === "workflow-tool"
       ? undefined
       : (expectFunction(resolvedRecord.execute, describe(definition, "to provide an execute function")) as ...);
 
+  // 模块自己导出了 schema 就用它，否则退回编译期序列化的那份
   const inputSchema = isToolSchema(resolvedRecord.inputSchema)
     ? resolvedRecord.inputSchema
     : toInputSchema(definition.inputSchema);
@@ -142,6 +151,7 @@ export async function resolveToolDefinition(
 **三、schema 有两条来源。**
 
 ```ts
+// 优先用模块导出的 schema：它可能带 .refine 之类的运行时约束
 const inputSchema = isToolSchema(resolvedRecord.inputSchema)
   ? resolvedRecord.inputSchema
   : toInputSchema(definition.inputSchema);
@@ -165,9 +175,13 @@ export async function loadResolvedModuleExport(input: {
   readonly moduleMap: CompiledModuleMap;
   readonly nodeId: string | undefined;
 }): Promise<unknown> {
+  // nodeId 缺省落到根节点：只有子代理会显式传
   const resolvedNodeId = input.nodeId ?? ROOT_COMPILED_AGENT_NODE_ID;
+
+  // 两级查找：先按节点，再按 sourceId
   const moduleNamespace = input.moduleMap.nodes[resolvedNodeId]?.modules[input.definition.sourceId];
 
+  // 找不到多半是产物过期（编译过，但 module map 没重新生成）
   if (moduleNamespace === undefined) {
     throw new ResolveAgentError(
       `Missing compiled module namespace for ${input.kindLabel} source "${input.definition.sourceId}" in node "${resolvedNodeId}".`,
@@ -175,12 +189,14 @@ export async function loadResolvedModuleExport(input: {
     );
   }
 
+  // 导出名默认 default，也支持具名导出
   const moduleRecord = expectObjectRecord(moduleNamespace, ...);
   const exportValue = getAuthoredModuleExport(moduleRecord, {
     exportName: input.definition.exportName,
     logicalPath: input.definition.logicalPath,
   });
 
+  // 允许导出工厂函数：在这里统一求值，调用方拿到的就是值
   return await materializeAuthoredModuleExport(exportValue);
 }
 ```
@@ -213,6 +229,7 @@ export async function loadResolvedModuleExport(input: {
 ```ts
 // packages/eve/src/compiler/module-lifecycle.ts
 class NodeModuleLifecycle {
+  // 两本账：编译期被读过的、运行期要当入口的
   readonly #compileLoads = new Set<string>();
   readonly #runtimeRoots = new Set<string>();
 
@@ -227,6 +244,7 @@ class NodeModuleLifecycle {
   finalize(
     bindings: Readonly<Record<string, AgentModuleBinding>>,
   ): Record<string, CompiledModuleBinding> {
+    // 运行期入口要连依赖闭包一起算：它 import 的模块也得能加载
     const runtimeEntries = collectRuntimeEntryClosure(bindings, this.#runtimeRoots);
     const compiled: Record<string, CompiledModuleBinding> = {};
 
@@ -235,9 +253,11 @@ class NodeModuleLifecycle {
         compile: this.#compileLoads.has(sourceId),
         runtimeEntry: runtimeEntries.has(sourceId),
       };
+      // 两本账都没记上：这个模块不会进产物，直接失败，不留僵尸条目
       if (!usage.compile && !usage.runtimeEntry) {
         throw new Error(`Selected module binding "${sourceId}" has no compile or runtime usage.`);
       }
+      // usage 冻结后写进 manifest，运行期据此判断要不要加载
       compiled[sourceId] = Object.freeze({ ...binding, usage: Object.freeze(usage) });
     }
 
@@ -271,6 +291,7 @@ dev 下重启进程会归零，生产下所有用户共享同一个计数器。
 
 ```ts
 // packages/eve/src/context/key.ts:16
+// 注册表挂在 globalThis 上：同一进程里多个模块副本共用一份
 const KEY_REGISTRY_GLOBAL_KEY = Symbol.for("eve.context-key-registry");
 const globalKeyRegistryContainer = globalThis as KeyRegistryGlobal;
 
@@ -288,6 +309,7 @@ export class ContextKey<T> {
     this.name = name;
     this.codec = options.codec;
 
+    // 同名但 codec 对不上：直接抛错。序列化会不兼容，静默覆盖更难查
     const existing = keyRegistry.get(name);
     if (existing !== undefined && (existing.codec === undefined) !== (this.codec === undefined)) {
       throw new Error(
@@ -297,6 +319,7 @@ export class ContextKey<T> {
       );
     }
 
+    // 同名同 codec 允许重复注册：热重载时模块会被重新求值
     keyRegistry.set(name, this as ContextKey<unknown>);
   }
 }
@@ -324,6 +347,7 @@ export function resolveEffectiveAgentRuntimeFromConfig(
   bundle: Pick<CompiledBundle, "resolvedAgent" | "turnAgent">,
   config: DynamicSubagentAgentConfig | undefined,
 ): EffectiveAgentRuntime {
+  // 没有动态配置：用编译期那份。但解析器还挂着，说明调用方漏选了具体配置
   if (config === undefined) {
     if (bundle.turnAgent.configResolver === true) {
       throw new Error("Dynamic subagent execution requires a selected concrete agent config.");
@@ -335,6 +359,7 @@ export function resolveEffectiveAgentRuntimeFromConfig(
     };
   }
 
+  // 有动态配置：先剥掉旧的模型字段，再用新配置覆盖，避免残留
   const { compactionModel: _c, configResolver: _r, dynamicModel: _d, model: _m, ...turnAgent } = bundle.turnAgent;
   return {
     limits: config.limits,
@@ -384,7 +409,7 @@ export function resolveEffectiveAgentRuntimeFromConfig(
 
 对象装好了，能跑了。但「跑」这件事在 eve 里不是一次函数调用，而是一串 step。
 
-第 24 章讲 workflow：一个会话为什么被切成很多步，每步结束时存了什么，以及为什么崩溃之后你的工具可能被执行两次。
+第 24 章讲 workflow：它为什么是 eve 和其他 agent 框架最大的区别，一个会话怎么变成一个 workflow run，以及为什么崩溃之后你的工具可能被执行两次。
 
 ---
 

@@ -28,10 +28,12 @@ import { validateWorkflowWorld, type ValidateWorkflowWorldInput } from "#interna
  * World before its queue begins delivering.
  */
 export async function installWorkflowWorld(input: ValidateWorkflowWorldInput): Promise<void> {
+  // 顺序不能换：先校验，再包装（guard 会替换 createQueueHandler），最后才启动
   validateWorkflowWorld(input);
   const world = guardStrandedSessionReplay(input.world);
   setWorld(world);
   await getWorld();
+  // start 之后队列就开始投递，包装必须在这之前完成
   await world.start?.();
 }
 ```
@@ -49,10 +51,12 @@ export async function installWorkflowWorld(input: ValidateWorkflowWorldInput): P
 
 ```ts
 // packages/eve/src/internal/workflow/validate-world.ts:23
+// asserts：校验通过后，TypeScript 也认为 world 一定存在
 export function validateWorkflowWorld(input: ValidateWorkflowWorldInput): asserts input is {
   readonly packageName?: string;
   readonly world: World;
 } {
+  // 版本不兼容在这里抛，不等到队列投递时才发现
   assertConfiguredWorldCompatibility(input.packageName);
 
   if (!isWorkflowWorld(input.world)) {
@@ -69,6 +73,7 @@ export function validateWorkflowWorld(input: ValidateWorkflowWorldInput): assert
 
 ```ts
 // packages/eve/src/internal/workflow/world-compatibility.ts
+// 只关心这两个包的版本：world 的实现契约由它们定义
 const WORKFLOW_COMPATIBILITY_PACKAGES = ["@workflow/core", "@workflow/world"] as const;
 
 export interface WorkflowWorldManifest {
@@ -77,12 +82,14 @@ export interface WorkflowWorldManifest {
 }
 
 function parseVersionLine(value: string): VersionLine | undefined {
+  // 只取 major 和预发布标签，补丁号直接忽略
   const match = /(\d+)\.(?:\d+|x|\*)(?:\.(?:\d+|x|\*))?(?:-([0-9A-Za-z.-]+))?/.exec(value.trim());
   if (match === null) return undefined;
 
   const major = Number(match[1]);
   if (!Number.isInteger(major)) return undefined;
 
+  // 预发布标签只取第一段：1.2.0-beta.3 → beta
   const prerelease = match[2];
   const prereleaseTag = prerelease === undefined ? undefined : prerelease.split(".")[0];
 
@@ -125,17 +132,23 @@ function parseVersionLine(value: string): VersionLine | undefined {
  * that replay each run on its own deployment are returned untouched.
  */
 export function guardStrandedSessionReplay<TWorld extends World>(world: TWorld): TWorld {
+  // 能按 run 路由回原部署的 world 不需要这层保护
   if (routesToOwnerDeployment(world)) return world;
+
   const { name } = resolveInstalledPackageInfo();
+  // 只盯两类 run：顶层会话（保留）和工具 run（取消）
   const guardedWorkflows = new Map<string, GuardedWorkflow>([
     [`workflow//${name}//${WORKFLOW_ENTRY_NAME}`, "session"],
     [`workflow//${name}//${WORKFLOW_TOOL_RUN_WORKFLOW_NAME}`, "tool"],
   ]);
+
+  // 包一层 createQueueHandler：投递前先看这个 run 是不是别的版本留下的
   const createQueueHandler = world.createQueueHandler.bind(world);
   world.createQueueHandler = (queueNamePrefix, handler) =>
     createQueueHandler(queueNamePrefix, async (message, meta) => {
       const workflow = guardedWorkflows.get(meta.queueName.slice(queueNamePrefix.length));
       const runId = readRunId(message);
+      // 确认是退休 run 就吞掉这次投递，不执行 handler
       if (workflow !== undefined && runId !== undefined && (await skipRetiredRun(world, runId, workflow))) {
         return undefined;
       }
@@ -171,6 +184,7 @@ export function guardStrandedSessionReplay<TWorld extends World>(world: TWorld):
 
 ```ts
 async function skipRetiredRun(world: World, runId: string, workflow: GuardedWorkflow): Promise<boolean> {
+  // 读不到 run 记录：当成本版本的，正常执行
   const run = await readRetiredRun(world, runId);
   if (run === undefined) return false;
   switch (strandedReplayAction(run, workflow)) {

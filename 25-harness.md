@@ -27,21 +27,31 @@ step.completed
 ```ts
 // packages/eve/src/harness/tool-loop.ts · executeStepBody()
 async function executeStepBody(initialSession, generation, live, input, instrumentation) {
+  // 历史视图按当前投影重建：上一次 step 写进去的内容，到这里才可见
   const prepareHistory = createHistoryViewPreparer({ previous: config.historyView, projector: config.historyProjector });
   prepareHistory(initialSession.history, initialSession.state);
   // ...
+
+  // 两个只做单一动作的入口：清空、压缩，都不跑模型
   if (config.clearOnly === true) return clearContext(step);
   if (config.compactOnly === true) return compactHistory(step);
 
+  // 先把「等着的工作」结算掉：审批结果、排队消息、定时任务
   const runtime = await settleRuntimeWork(step, input);
+  // undefined 表示这一轮没有要跑模型的工作，不消耗模型调用
   if (runtime === undefined) return { next: null, session: step.session };
+
   const intake = await acceptHumanInput(step, runtime.input, { takeQueued: !runtime.waited });
+  // stop：这一轮到此结束（比如用户取消）
   if (intake.kind === "stop") return intake.result;
+
   const turn = await prepareTurnInput(step, intake.input, { consumedMessage: intake.consumedMessage });
+  // 只有新消息才开新 turn；审批续跑不开
   if (intake.opensTurn) {
     const failed = await openTurn(step, { input: [...turn.ephemeral, ...turn.messages], message: intake.message });
     if (failed !== undefined) return failed;
   }
+  // 审批通过的工作在这里放行
   await admitApprovedWork(step, intake.approved);
 
   return runModelStep(step, {
@@ -80,10 +90,13 @@ const agent = new ToolLoopAgent({
   onStepEnd: hooks.onStepEnd,
   onStepStart: hooks.onStepStart,
   prepareStep: hooks.prepareStep,
+  // reasoning 先取模型引用上的配置，再退回会话级
   reasoning: step.session.agent.modelReference?.reasoning ?? step.session.agent.reasoning,
   runtimeContext,
+  // 一次模型调用就是一个 SDK step，自动循环关掉
   stopWhen: isStepCount(1),
   telemetry: toEntryTelemetry(attempt?.telemetry, catalog.resolve),
+  // 首块和块间用同一个超时：流卡住比整体慢更常见
   timeout: { chunkMs: MODEL_OUTPUT_TIMEOUT_MS, firstChunkMs: MODEL_OUTPUT_TIMEOUT_MS },
   toolApproval: buildToolApproval({ ... }),
   tools,
@@ -118,7 +131,11 @@ eve 的处理是：**不抛异常，合成一条 tool error 消息塞回历史�
 // packages/eve/src/harness/step/after-model.ts:73
 export async function handleStepResult(step: Step, input: ModelResponse): Promise<StepResult> {
   const { promptMessages, result } = input;
+
+  // 取出这一步的助手文本：多段 message 合并成一段
   const stepOutput = resolveAssistantStepText(result.response.messages, result.text);
+
+  // 参数不合法的工具调用：不抛错，转成 tool error 让模型自己改
   const invalidInputToolErrors = getInvalidToolCallInputErrors({
     toolCalls: result.toolCalls as TypedToolCall<ToolSet>[],
   });
@@ -130,6 +147,8 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
     ...result.toolCalls.filter(isInvalidToolCall).map((toolCall) => toolCall.toolCallId),
     ...invalidInputToolErrors.map((toolError) => toolError.toolCallId),
   ]);
+
+  // 给每个工具调用补一条结果消息：下一轮请求要求历史里每个 call 都有 result
   const rawResponseMessages = appendMissingToolResultMessages({
     append: invalidInputToolErrors.map((toolError) => createToolResultMessagePartFromToolError(toolError)),
     responseMessages: result.response.messages,
@@ -153,6 +172,7 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
 另一类工具是 `providerExecuted`：
 
 ```ts
+// 厂商侧执行的工具（web_search 之类）不会回到本地：按 id 记下来，跳过本地执行
 const providerExecutedOutcomeIds = new Set<string>();
 for (const part of [...(result.content ?? []), ...(result.toolResults ?? [])]) {
   if ((part.type === "tool-result" || part.type === "tool-error") && part.providerExecuted === true) {
@@ -186,13 +206,18 @@ private async compact(options: ModelCallOptions, tools: ToolSet): Promise<ToolSe
       requestEnvelopeTokens: this.requestEnvelopeTokens,
       // ...
     });
+    // 压缩失败不吞：记下来，这一轮直接失败
     if (compaction.failure !== undefined) throw compaction.failure.error;
   } catch (error) {
     this.compactionFailure = { error };
     throw error;
   }
+
+  // 压缩会改写 session：历史被换成摘要 + 保留的尾部
   step.session = compaction.session;
+  // 没压成（比如没超阈值）就原样返回工具集
   if (!compaction.compacted) return tools;
+
   compactPrompt(step, prompt, compaction.messages);
   // ... 重建工具集
 }
@@ -207,6 +232,7 @@ export function shouldCompact(
   requestEnvelopeTokens = 0,
   previousEnvelopeTokens = 0,
 ): boolean {
+  // 三个数相加：消息本身的 token + 请求信封 + 压缩提示的固定开销
   return (
     messages.length > 0 &&
     getInputTokenCount(messages, config, requestEnvelopeTokens, previousEnvelopeTokens) +
@@ -237,9 +263,13 @@ step.completed
 `turn.waiting` 不是「模型在思考」，是「这个 turn 主动停下了，等外部输入」：
 
 ```ts
+// 先结算「等着的工作」：审批结果、排队消息、定时任务
 const runtime = await settleRuntimeWork(step, input);
+// 没有要跑的东西：直接返回，不消耗模型调用
 if (runtime === undefined) return { next: null, session: step.session };
+
 const intake = await acceptHumanInput(step, runtime.input, { takeQueued: !runtime.waited });
+// stop：这一轮结束（比如用户取消）
 if (intake.kind === "stop") return intake.result;
 ```
 

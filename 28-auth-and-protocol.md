@@ -8,6 +8,7 @@
 
 ```ts
 export default eveChannel({
+  // 数组里的策略按顺序尝试，第一个返回真值的赢
   auth: [httpBasic({ username: "ops", password: process.env.OPS_PASSWORD! })],
 });
 ```
@@ -26,16 +27,19 @@ export async function routeAuth(
   request: Request,
   auth: AuthFn<Request> | readonly AuthFn<Request>[],
 ): Promise<AuthResult | Response> {
+  // 单个函数也接受，统一转成数组
   const list: readonly AuthFn<Request>[] = Array.isArray(auth)
     ? (auth as readonly AuthFn<Request>[])
     : [auth as AuthFn<Request>];
 
   try {
+    // 按顺序试，第一个返回真值的赢；返回 null/undefined 交给下一个
     for (const fn of list) {
       const result = await fn(request);
       if (result) return result;
     }
   } catch (error) {
+    // 抛错时带 response 字段：策略可以自定义拒绝响应（429、400……）
     if (
       typeof error === "object" &&
       error !== null &&
@@ -47,6 +51,7 @@ export async function routeAuth(
     throw error;
   }
 
+  // 全都没通过：用策略声明过的 challenge 拼 WWW-Authenticate
   const declaredChallenges = collectDeclaredChallenges(list);
   const challenges =
     declaredChallenges.length > 0
@@ -75,8 +80,11 @@ export async function routeAuth(
 ```ts
 function addInvalidBearerTokenError(request, challenges) {
   const authorization = request.headers.get("authorization");
+  // 没带 Bearer，或策略没声明 Bearer：不加 error，客户端会去登录
   if (authorization === null || !/^Bearer(?:\s|$)/i.test(authorization.trim())) return challenges;
   if (!challenges.some((challenge) => challenge.scheme === "Bearer")) return challenges;
+
+  // 带了 Bearer 还被拒：加 error="invalid_token"，客户端据此去刷新
   return challenges.map((challenge) =>
     challenge.scheme !== "Bearer" || challenge.parameters?.error !== undefined
       ? challenge
@@ -101,6 +109,7 @@ export function authenticateHttpBasicStrategy(input: {
   readonly authorization: string;
   readonly strategy: ResolvedHttpBasicAuthStrategy;
 }): RouteStrategyAuthenticationResult {
+  // 头解析不出来（没带、不是 Basic、base64 坏了）都算「未认证」，交给下一个策略
   const credentials = parseBasicAuthorizationHeader(input.authorization);
 
   if (credentials === null) {
@@ -109,12 +118,14 @@ export function authenticateHttpBasicStrategy(input: {
     };
   }
 
+  // 用户名先比：不匹配也只说 not-authenticated，不区分「用户不存在」和「密码错」
   if (normalizeCredential(credentials.username) !== normalizeCredential(input.strategy.username)) {
     return {
       kind: "not-authenticated",
     };
   }
 
+  // 密码用常数时间比较：普通 === 会因为提前返回泄漏前缀
   if (
     !timingSafeStringEquals(
       normalizeCredential(credentials.password),
@@ -126,6 +137,7 @@ export function authenticateHttpBasicStrategy(input: {
     };
   }
 
+  // 通过：principalId 用配置里的用户名，不用请求里的
   return {
     kind: "authenticated",
     principal: {
@@ -148,6 +160,7 @@ export function authenticateHttpBasicStrategy(input: {
 **二、`timingSafeStringEquals` 先 hash 再比。**
 
 ```ts
+// 先 sha256 再比：长度不等时 timingSafeEqual 会抛错，哈希后长度固定
 function timingSafeStringEquals(left: string, right: string): boolean {
   return timingSafeEqual(hashString(left), hashString(right));
 }
@@ -179,6 +192,7 @@ const auth = async (request: Request) => {
   const header = request.headers.get("authorization");
   if (header === null) return null;          // 没带，交给下一个策略
 
+  // 带了但不是 Basic：不是「没认证」，是请求错了，直接 400
   if (!header.startsWith("Basic ")) {
     throw Object.assign(new Error("wrong scheme"), {
       response: Response.json({ error: "expected Basic" }, { status: 400 }),
@@ -203,6 +217,7 @@ const auth = async (request: Request) => {
 `forwardedPrincipal` 解决的是「上游服务代用户调用」的场景。它不能无条件信任，所以有一个显式开关：
 
 ```ts
+// 只有 trustedForwarders 里列出的来源，转发来的身份才被采纳
 const forwarded = await resolveForwardedPrincipal({
   trustedForwarders: input.trustedForwarders,
   forwarder: auth,
@@ -218,6 +233,7 @@ if (forwarded instanceof Response) return forwarded;
 追踪上下文走另一条路：
 
 ```ts
+// 只有回调请求才解析 traceparent：普通请求不该被上游的 trace 影响
 const transportParentTraceContext =
   body.callback === undefined ? undefined : parseTraceparent(req.headers.get("traceparent"));
 const parsedParentTraceContext =
@@ -236,6 +252,7 @@ const parsedParentTraceContext =
 `protocol/message.ts` 有 2080 行，大部分是事件类型定义。顶层是一个 37 个成员的联合：
 
 ```ts
+// 判别联合：每个成员自带 type 字面量，switch 之后 data 的字段就确定了
 export type UnstampedMessageStreamEvent =
   | ActionInputAppendedStreamEvent
   | AgentStartedStreamEvent
@@ -260,6 +277,7 @@ export type UnstampedMessageStreamEvent =
 每个成员都有一个字面量 `type` 字段做判别。这样客户端可以：
 
 ```ts
+// 按 type 分支之后，TypeScript 知道 data 有哪些字段
 switch (event.type) {
   case "message.appended":
     // TypeScript 在这里知道 event.data 有 messageDelta
@@ -277,6 +295,7 @@ switch (event.type) {
 信封：
 
 ```ts
+// id 从 stream version 20 起才有：回放老会话时这个字段可能缺失
 export interface MessageStreamEventMeta {
   /** Server-issued message delivery identities, retained across the turn's workflow steps. */
   readonly deliveryIds?: readonly string[];
@@ -300,6 +319,7 @@ export interface MessageStreamEventMeta {
 当前版本：
 
 ```ts
+// 协议版本号：加字段会升版本，客户端据此判断支持哪些能力
 export const EVE_MESSAGE_STREAM_VERSION = "26";
 ```
 
@@ -312,6 +332,7 @@ export const EVE_MESSAGE_STREAM_VERSION = "26";
 解码器只有 83 行，但注释解释了为什么不能省事：
 
 ```ts
+// 取消必须往上游传：否则停泊的会话会让文件轮询一直挂着
 /**
  * Cancellation is forwarded to the source. When the returned stream is
  * cancelled — e.g. an SSE client disconnects and the server cancels the
@@ -332,6 +353,7 @@ export const EVE_MESSAGE_STREAM_VERSION = "26";
 ```ts
 async cancel(reason) {
   cancelled = true;
+  // 关键在这一行：把取消传给底层 reader，否则 pending 的 read() 永不返回
   await reader?.cancel(reason);
 }
 ```

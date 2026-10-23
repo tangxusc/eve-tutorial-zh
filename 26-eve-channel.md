@@ -17,15 +17,19 @@
 ```ts
 // packages/eve/src/eve-channel/index.ts:114
 export function eveChannel(input: EveChannelInput): EveChannel {
+  // 上传策略在这里合并默认值，路由里直接读，不用再判断
   const uploadPolicy = mergeUploadPolicy(input.uploadPolicy);
 
+  // 返回的不是 handler，是一份通道定义：路由表 + CORS + 会话策略
   return defineChannel<undefined, EveEventContext>({
     cors: normalizeEveCors(input.cors),
     turnPolicy: input.turnPolicy,
+    // audience 支持常量或函数：函数形式可以按请求算
     audience: (classifierInput) => {
       const audience = input.audience ?? defaultEveAudience;
       return typeof audience === "function" ? audience(classifierInput) : audience;
     },
+    // 23 条路由都在这张表里，健康检查排最前
     routes: [
       GET(EVE_HEALTH_ROUTE_PATH, async () => healthResponse()),
       HEAD(EVE_HEALTH_ROUTE_PATH, async () => healthResponse()),
@@ -105,6 +109,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
 
 ```ts
 GET(EVE_INFO_ROUTE_PATH, async (req, args) => {
+  // 鉴权不是中间件：每条路由自己调，返回 Response 就代表被拒
   const authResult = await routeAuth(req, input.auth);
   if (authResult instanceof Response) return authResult;
   // ... 业务逻辑
@@ -146,6 +151,7 @@ GET(EVE_INFO_ROUTE_PATH, async (req, args) => {
 第 4 条值得单独说。客户端不能自己传 `continuationToken`：
 
 ```ts
+// 客户端不许自带 continuationToken：能传就能冒充别人的会话
 const tokenRejection = rejectSessionContinuationToken(payload);
 if (tokenRejection !== null) return tokenRejection;
 ```
@@ -155,6 +161,7 @@ if (tokenRejection !== null) return tokenRejection;
 第 9 条是幂等：
 
 ```ts
+// operationId 幂等：先换成内部 token，再看这个 token 有没有对应的会话
 const operationToken =
   body.operationId === undefined
     ? undefined
@@ -162,6 +169,7 @@ const operationToken =
 if (operationToken !== undefined) {
   const owner = await args.resolveSession(operationToken);
   if (owner !== undefined) {
+    // 已经有主：返回旧会话 id。202 的语义是「已受理」，不是新建成功
     return Response.json(createdSessionBody(owner.id, body), {
       headers: { "cache-control": "no-store", [EVE_SESSION_ID_HEADER]: owner.id },
       status: 202,
@@ -183,21 +191,25 @@ if (operationToken !== undefined) {
 ```ts
 // packages/eve/src/eve-channel/request.ts:299
 export async function createSessionStreamResponse(request: Request, session: Session): Promise<Response> {
+  // startIndex 解析失败会直接返回 400 Response，不是抛错
   const startIndex = parseStartIndex(request);
   if (startIndex instanceof Response) return startIndex;
   const follow = parseFollow(request);
+  // follow 模式默认不给 tail index：跟着走不需要知道尾部在哪
   const includeTailIndex = !follow || parseIncludeTailIndex(request);
 
   try {
     // Resolve the tail before committing a response; otherwise an unknown or
     // unreachable session would answer 200 and fail mid-body. Open the event
     // stream alongside the tail lookup to avoid an extra round trip.
+    // 两个请求并发发出：省一次往返，但响应必须等 tail 拿到才提交
     const eventsPromise = session.getEventStream({ follow, startIndex });
     eventsPromise.catch(() => {});
     let tailIndex: number;
     try {
       tailIndex = await session.getStreamTailIndex();
     } catch (error) {
+      // tail 查不到就把已开的流取消，否则 reader 会一直挂着
       void eventsPromise.then((events) => events.cancel()).catch(() => {});
       throw error;
     }
@@ -206,7 +218,7 @@ export async function createSessionStreamResponse(request: Request, session: Ses
     return new Response(
       serializeAsNdjson(
         events,
-        request.signal,
+        request.signal,   // 客户端断开时把取消传下去
         includeTailIndex ? streamEventLimit(startIndex, tailIndex) : undefined,
         controlVersion !== undefined,
       ),
@@ -276,11 +288,12 @@ const commandWithoutCaller = {
   delivery,
   kind: "send" as const,
   payload,
-  requestId: metadata.requestId,
+  // 优先级：本次调用 > 会话元数据 > 默认值（steer）
   turnPolicy: options.turnPolicy ?? metadata.turnPolicy ?? DEFAULT_TURN_POLICY,
   title: options.title,
 };
 return await runtime.dispatchSession({
+  // caller 只在有身份时加：匿名请求不该带这个字段
   command: caller === undefined ? commandWithoutCaller : { ...commandWithoutCaller, caller },
   sessionId: id,
 });
@@ -289,6 +302,7 @@ return await runtime.dispatchSession({
 默认值在 `channel/types.ts:188`：
 
 ```ts
+// 默认 steer：新消息打断正在跑的 turn。想排队就显式配 "queue"
 export const DEFAULT_TURN_POLICY: TurnPolicy = "steer";
 ```
 

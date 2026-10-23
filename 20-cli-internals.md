@@ -20,6 +20,8 @@
 // packages/eve/bin/eve.js · runEveCli()
 export async function runEveCli(argv = process.argv.slice(2), overrides = {}, dependencies = {}) {
   const options = createBootstrapOptions(overrides);
+
+  // 第一道关：Node 版本不满足 engines.node 就直接报错，不进 commander
   await assertSupportedNodeVersion(
     dependencies.nodeVersion,
     dependencies.nodeEngineRequirement,
@@ -27,10 +29,14 @@ export async function runEveCli(argv = process.argv.slice(2), overrides = {}, de
     dependencies,
   );
 
+  // 第二道关：dist 比源码旧时先编译；npm 安装的包没有源码，直接返回现成产物
   const cliEntrypointPath = await ensureBuiltCli(options, dependencies);
   const importModule = dependencies.importModule ?? ((specifier) => import(specifier));
+
+  // 到这一步才真正加载 CLI：--help 不会把 TUI、eval runner、Vercel SDK 拉进内存
   const cliModule = await importModule(pathToFileURL(cliEntrypointPath).href);
 
+  // 导出契约：bin 只认 runCli 这一个名字，改掉整个 CLI 起不来
   if (typeof cliModule.runCli !== "function") {
     throw new Error(`The eve CLI module at ${cliEntrypointPath} does not export runCli().`);
   }
@@ -51,16 +57,19 @@ export async function runEveCli(argv = process.argv.slice(2), overrides = {}, de
 
 ```js
 // packages/eve/bin/eve.js · ensureBuiltCli()
+// 产物在，且这个包能构建（源码或 workspace 安装），才需要比时间戳
 if (await exists(options.cliEntrypointPath)) {
   if (!packageCanBuildCli) {
     return options.cliEntrypointPath;
   }
 
+  // 取「所有源码里最新的 mtime」和 dist 入口的 mtime 比
   const [latestBuildInputMtimeMs, cliEntrypointMtimeMs] = await Promise.all([
     getBuildInputMtimeMs({ packageRoot: options.packageRoot }),
     getEntrypointMtimeMs(options.cliEntrypointPath),
   ]);
 
+  // 用 >= 而不是 >：同一毫秒内完成的构建不会被误判成过期，否则每次执行都重编
   if (cliEntrypointMtimeMs !== undefined && cliEntrypointMtimeMs >= latestBuildInputMtimeMs) {
     return options.cliEntrypointPath;
   }
@@ -83,14 +92,12 @@ if (await exists(options.cliEntrypointPath)) {
 ```js
 // packages/eve/bin/eve.js 末尾
 } finally {
-  // Pipes and sockets can accept writes asynchronously, and `process.exit`
-  // drops anything still queued, truncating large output such as
-  // `eve info --json` read by a parent Node process.
+  // 先冲刷：管道是异步写，process.exit 会丢掉还在队列里的数据。
+  // 大输出（比如 eve info --json 被父进程读取）会被截断在半截。
   await Promise.all([flushWritable(process.stdout), flushWritable(process.stderr)]);
-  // The CLI bootstraps build/dev toolchains that can leave native service
-  // handles alive after the command has completed. Once the top-level
-  // command resolves, terminate the bin process explicitly so commands like
-  // `eve dev` + `/exit` do not hang on leaked implementation details.
+
+  // 再退出：dev 构建链会留下 native handle，不显式退，命令结束后进程会挂住。
+  // 所以 `eve dev` + `/exit` 不会卡在那里。
   process.exit(process.exitCode ?? 0);
 }
 ```
@@ -109,12 +116,15 @@ if (await exists(options.cliEntrypointPath)) {
 
 ```ts
 // packages/eve/src/cli/run.ts · createCliProgram()
+// 每个命令都是同一个形状：声明选项 → action 里动态 import 实现 → 执行
 agentCommand(program.command("start"), applicationContext)
   .description("Start a built eve application.")
   .option("--host <host>", "Host interface to bind")
   .option("--port <port>", "Port to listen on (defaults to $PORT, then 3000)", parsePortOption)
   .action(async (options: ProductionCliOptions) => {
     const { loadDevelopmentEnvironmentFiles } = await import("#cli/dev/environment.js");
+
+    // 生产启动也读 .env：eve start 不是「什么都不加载」
     await loadDevelopmentEnvironmentFiles(applicationContext.root);
     // ... 起生产服务器
   });
@@ -129,13 +139,18 @@ agentCommand(program.command("start"), applicationContext)
 ```ts
 // packages/eve/src/cli/run.ts:385 · runCli()
 let input = argv;
+
+// argv 为空时，用「当前目录是不是应用根」决定跑什么
 if (input.length === 0) {
   const findApplicationRoot = runtime.findApplicationRoot ?? findCliApplicationRoot;
   const appRoot = await findApplicationRoot(applicationContext.root);
+
   if (appRoot === undefined) {
+    // 不在应用里：agents/ 工作区跑 dev，其余情况跑 init
     const projectContext = await findEveProjectContext(applicationContext.root);
     input = projectContext?.kind === "workspace" ? ["dev"] : ["init"];
   } else {
+    // 在应用里：先把根切过去，再跑 dev
     applicationContext.root = appRoot;
     input = ["dev"];
   }
@@ -163,12 +178,16 @@ export function agentCommand(
   applicationContext: CliApplicationContext,
   requirement: AgentCommandRequirement = () => true,
 ): Command {
+  // 所有命令共享 --agent，只注册一次，靠 preAction 在动作之前解析
   command.option("--agent <name>", "Select an agent from an agents/ workspace");
+
   return command.hook("preAction", async (_command, actionCommand) => {
     const requestedName = actionCommand.opts<{ agent?: string }>().agent;
     if (!requirement(actionCommand)) { /* ... */ return; }
 
     const initialSelection = await applicationContext.resolveAgent();
+
+    // 工作区：按 --agent 选成员，没给名字就交互式问
     if (initialSelection.kind === "workspace") {
       applicationContext.root = await selectWorkspaceAgent(initialSelection.workspace, requestedName);
       await applicationContext.resolve();
@@ -200,7 +219,9 @@ program
   .name("eve")
   .version(packageVersion)
   .showHelpAfterError()
+  // 不让 commander 自己 process.exit：错误要回到 runCli，由它统一决定退出码
   .exitOverride()
+  // 输出交给 logger：和框架日志同格式、同一个出口，测试里也好捕获
   .configureOutput({
     writeErr: (message) => {
       logger.error(message.trimEnd());
@@ -221,10 +242,14 @@ catch 里有个专门的补丁：
 if (error instanceof CommanderError) {
   const detectCodingAgentLaunch = runtime.isCodingAgentLaunch ?? isCodingAgentLaunch;
   const agentLaunched = await detectCodingAgentLaunch();
+
+  // 在 AI coding agent 里跑 init 失败时，补一段给 agent 看的下一步指引
   if (input[0] === "init" && agentLaunched) {
     const { initAgentInstructions } = await import("#cli/commands/agent-instructions.js");
     logger.log(initAgentInstructions());
   }
+
+  // 转成普通 Error：退出码由外层统一处理，commander 的 exitCode 不再生效
   throw new Error(error.message);
 }
 ```
@@ -238,6 +263,8 @@ if (error instanceof CommanderError) {
 `eve dev` 不是「在一个进程里起个 HTTP server」，它 fork 一个子进程。原因写在 `local-server-process.ts` 的文件头：
 
 ```ts
+// 这段注释就是 fork 子进程的全部理由，三条各对应一种失败模式：
+// TUI 的 raw mode 关掉 ISIG、headless 下同组信号父子竞争、macOS 没有父进程死亡信号。
 /**
  * The `eve dev` server child: forked `detached` (its own process group) and
  * bound to the CLI's lifetime through the IPC channel, never through the OS.
@@ -271,16 +298,23 @@ if (error instanceof CommanderError) {
 
 ```ts
 // packages/eve/src/cli/dev/local-server-process.ts · start()
+// 父子之间只有 IPC 一条通道：启动进度、启动结果、关闭请求都走它
 spawned.on("message", (message: ChildMessage) => {
   if (message.type === "progress") options.onBootProgress?.(message.event);
+
+  // started 只认第一次，重复消息不会二次 resolve
   if (message.type === "started" && !settled) {
     settled = true;
     resolve(message.handle);
+
+    // existing：已有 server 在跑，这个子进程探测完就该退，退出不算异常
     if (message.handle.kind === "existing") {
       expectedExit = true;
       release();
     }
   }
+
+  // failed：把子进程的原始错误抛给调用方，不再二次包装
   if (message.type === "failed" && !settled) {
     settled = true;
     reject(new Error(message.message));
@@ -303,6 +337,7 @@ spawned.on("message", (message: ChildMessage) => {
 判定在 `start-development-server.ts`：
 
 ```ts
+// 只要显式指定了任何一项 server 配置，就当作「你想自己控制」，不再自动附着
 const hasExplicitServerConfiguration =
   options.resume === true ||
   options.developmentExtensions !== undefined ||
@@ -310,9 +345,12 @@ const hasExplicitServerConfiguration =
   options.port !== undefined ||
   environmentPort !== undefined;
 
+// 什么都没指定：附着到已有实例，复用它的 URL，不再起第二个 server
 if (options.existing === "attach-if-unconfigured" && !hasExplicitServerConfiguration) {
   return { handle: { kind: "existing", appRoot: project.appRoot, url: existingServerUrl }, close: undefined };
 }
+
+// 指定了配置还撞端口：直接报错，让用户换端口或先关掉旧实例
 throw await createDevelopmentServerAlreadyRunningError(project.appRoot, existingServerUrl);
 ```
 
@@ -322,6 +360,8 @@ throw await createDevelopmentServerAlreadyRunningError(project.appRoot, existing
 
 ```ts
 // packages/eve/src/cli/dev/local-server-process.ts:47
+// 三级关闭的时间预算：550 + 150 + 100 = 800ms。
+// 必须小于 shutdown.ts 里 900ms 的兜底，否则 Ctrl+C 后 eve dev 会以非 0 退出。
 const IPC_SHUTDOWN_GRACE_MS = 550;
 const SIGTERM_GRACE_MS = 150;
 const SIGKILL_REAP_MS = 100;
@@ -334,14 +374,19 @@ export const DEV_SERVER_CLOSE_BUDGET_MS =
 
 ```ts
 // packages/eve/src/cli/dev/local-server-process.ts · close()
+// 一级：请子进程自己优雅关闭，给 550ms
 if (active.connected) active.send({ type: "shutdown" });
 if (
   await terminatesWithin(active, terminated.promise, () => childExited, IPC_SHUTDOWN_GRACE_MS)
 )
   return;
+
+// 二级：整个进程组 SIGTERM，给 150ms（子进程可能又 fork 了孙进程）
 signalProcessGroup(active, "SIGTERM");
 if (await terminatesWithin(active, terminated.promise, () => childExited, SIGTERM_GRACE_MS))
   return;
+
+// 三级：SIGKILL，只等内核回收，不再等它清理资源
 signalProcessGroup(active, "SIGKILL");
 await terminatesWithin(active, terminated.promise, () => childExited, SIGKILL_REAP_MS);
 ```
@@ -359,13 +404,19 @@ await terminatesWithin(active, terminated.promise, () => childExited, SIGKILL_RE
 ```ts
 // packages/eve/src/cli/dev/local-server-child.ts
 const stop = () => {
+  // 幂等：shutdown 消息、disconnect、信号可能同时到达
   if (stopping) return;
   stopping = true;
+
+  // 父进程可能已经没了，继续写 stdout 会 EPIPE：先把三个输出通道静音
   console.log = console.warn = console.error = () => {};
   process.stdout.on("error", () => {});
   process.stderr.on("error", () => {});
+
   const cleanup = server.close();
   if (process.connected) process.disconnect?.();
+
+  // 等清理意图写完再退：下次启动要靠这个文件回收沙箱资源
   void cleanup.then(
     async () => {
       await intentReady.catch(() => undefined);
@@ -377,8 +428,7 @@ const stop = () => {
 };
 
 process.on("message", (message) => { if (message.type === "shutdown") stop(); });
-// IPC disconnect is the parent-death signal: it fires however the parent
-// exits (including SIGKILL), which no portable OS mechanism covers.
+// IPC disconnect 就是父进程死亡信号：父进程被 kill -9 也会触发，OS 层没有等价机制
 process.once("disconnect", stop);
 process.once("SIGINT", stop);
 process.once("SIGTERM", stop);
@@ -398,8 +448,12 @@ process.once("SIGTERM", stop);
 ```ts
 // packages/eve/src/cli/shutdown.ts · installShutdownSignal()
 const handleSignal = (signal: NodeJS.Signals) => {
+  // TUI 占着终端时不响应信号，交给租约持有者处理
   if (terminalLeaseDepth > 0) return;
+
   signalCount += 1;
+
+  // 第二次 Ctrl+C 不再等待：SIGINT 退 130、SIGTERM 退 143，都是 shell 的惯例值
   if (signalCount > 1) process.exit(signal === "SIGINT" ? 130 : 143);
   stop(signal);
 };
@@ -413,6 +467,7 @@ const handleSignal = (signal: NodeJS.Signals) => {
 
 ```ts
 async withTerminalLease<T>(task: () => Promise<T>): Promise<T> {
+  // 用深度计数而不是布尔：嵌套调用时，只有最外层结束才真正释放终端
   terminalLeaseDepth += 1;
   try {
     return await task();
@@ -432,6 +487,8 @@ async withTerminalLease<T>(task: () => Promise<T>): Promise<T> {
 // packages/eve/src/cli/commands/init.ts · runInitCommand()
 const agentLaunched = await dependencies.isCodingAgentLaunch();
 const interactive = dependencies.hasInteractiveTerminal();
+
+// 三个条件同时成立才自动起 dev：有终端、不在 AI coding agent 里、没传 --non-interactive
 const startDevelopment = interactive && !agentLaunched && !options.nonInteractive;
 ```
 
@@ -481,6 +538,8 @@ const startDevelopment = interactive && !agentLaunched && !options.nonInteractiv
 ```ts
 // packages/eve/src/cli/commands/build.ts
 const projectContext = await input.applicationContext.resolveAgent();
+
+// 工作区：逐成员构建，产物落在各自目录下
 if (projectContext.kind === "workspace") {
   const { buildAgentWorkspace } = await import("#internal/vercel/build-agent-workspace.js");
   const outputDir = await buildAgentWorkspace(projectContext.workspace, {
@@ -489,6 +548,8 @@ if (projectContext.kind === "workspace") {
   // ...
   return;
 }
+
+// 单 agent：走 nitro 的构建入口，测试里可以注入别的实现
 const buildHost =
   input.buildHost ?? (await import("#internal/nitro/host.js")).buildApplication;
 ```
@@ -505,6 +566,8 @@ const server = await startProductionHost(applicationContext.root, {
   port: options.port,
 });
 logger.log(renderCliTaggedLine(theme, { message: `server listening at ${server.url}`, tag: "start" }));
+
+// 挂起等关闭信号。close 和 wait 分开传：先停止接收新请求，再等存量收尾
 await waitForShutdownSignal({ close: () => server.close(), wait: () => server.wait() });
 ```
 

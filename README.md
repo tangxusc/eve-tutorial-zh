@@ -45,7 +45,7 @@
 | --- | --- | --- |
 | [12 子代理](12-subagents.md) | 内置 `agent` 工具 vs 声明式子代理、隔离边界、task | 拆分复杂任务而不污染主上下文 |
 | [13 连接](13-connections.md) | MCP / OpenAPI、app 与 user 凭据、OAuth、凭据刷新、MCP 事件订阅 | 接第三方服务且不泄漏 token |
-| [14 通道](14-channels.md) | eve HTTP 通道、鉴权链、Slack、自定义通道 | 让 agent 出现在用户所在的地方 |
+| [14 通道](14-channels.md) | eve HTTP 通道、鉴权链、Slack、自定义通道的路由/鉴权/状态/投递参数 | 让 agent 出现在用户所在的地方 |
 | [15 定时与钩子](15-schedules-and-hooks.md) | cron 任务、事件钩子、事件落库 | 做日报、巡检、审计 |
 | [16 评测](16-evals.md) | `defineEval`、断言、judge、tool stub | 改提示词前先有回归网 |
 | [17 前端与部署](17-frontend-and-deploy.md) | `useEveAgent`、`withEve`、Vercel / 自托管 | 交付一个真实可用的应用 |
@@ -64,7 +64,7 @@
 | [21 discover](21-discover.md) | 文件放进 `agent/` 为什么毫无反应 | 根目录分类表、扩展名与排除、递归槽位、名字推导、三种冲突、诊断级别 |
 | [22 compiler](22-compiler.md) | 写 `tools/bash.ts` 会不会冲突？改了代码老会话为什么不变 | 六个产物、四层候选优先级、`shadowed`、module map 的两种加载、dev 快照 |
 | [23 runtime](23-runtime.md) | 工具里的计数器为什么串会话 | 声明与实现分离、工具装配的三个分支、模块级状态共享、context key |
-| [24 workflow](24-workflow.md) | 同一封邮件为什么发了两遍 | 会话就是一个 workflow、step 的七阶段、检查点存什么、重放边界 |
+| [24 workflow](24-workflow.md) | 同一封邮件为什么发了两遍 | workflow 到底是什么、和其他 agent 框架差在哪、workflow id 为什么不能改、step 的七阶段、检查点存什么 |
 | [25 harness](25-harness.md) | 一次问答为什么有三个 `step.started` | `stopWhen: isStepCount(1)`、工具错误回灌、压缩在调用前、停泊与续跑 |
 | [26 默认 eve channel](26-eve-channel.md) | 401 到底是谁拒的？重连为什么收到重复事件 | 23 条路由、鉴权不是中间件、建会话的十一道关、`startIndex` 与 tail index |
 | [27 channel 抽象](27-channel-abstraction.md) | 接内部 webhook，要写多少代码 | `defineChannel` 的三个产物、路由 handler 的十一个参数、adapter 持久状态、Slack 的 1529 行 |

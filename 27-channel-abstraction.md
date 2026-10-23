@@ -19,11 +19,12 @@
 export function defineChannel<TState = undefined, TCtx = void, ...>(
   definition: ChannelDefinition<TState, TCtx, TReceiveTarget, TMetadata>,
 ): Channel<TState, TReceiveTarget, TMetadata> {
+  // 两个产物：adapter 是事件处理器集合，cors 是规范化后的配置
   const adapter = buildAdapter(definition);
   const cors = normalizeChannelCors(definition.cors);
 
   const compiled: CompiledChannel<TState, TReceiveTarget, TMetadata> = {
-    __kind: CHANNEL_SENTINEL,
+    __kind: CHANNEL_SENTINEL,   // 运行时判断「这个对象是不是通道」
     routes: definition.routes,
     adapter,
     cors,
@@ -81,7 +82,9 @@ const session = await resolveSession({ channel: "slack", address: channelId });
 ```ts
 export type ChannelAdapter<TCtx extends ChannelAdapterContext<any> = ChannelAdapterContext> = {
   readonly kind: string;
+  // state 每个 step 边界做一次 JSON 快照：只能放可序列化的东西
   readonly state?: Record<string, unknown>;
+  // 把 agent 的输出投影成输入；返回 void 表示用默认投影
   deliver?(payload: DeliverPayload, ctx: TCtx): StepInput | void | Promise<StepInput | void>;
   createAdapterContext?(base: ChannelAdapterContext<StateOf<TCtx>>): TCtx;
   readonly fetchFile?: FetchFileFunction;
@@ -90,7 +93,7 @@ export type ChannelAdapter<TCtx extends ChannelAdapterContext<any> = ChannelAdap
     readonly metadata?: ChannelInstrumentationMetadataProjector;
     readonly audience?: ChannelAudienceProjector;
   };
-} & ChannelEventHandlers<TCtx>;
+} & ChannelEventHandlers<TCtx>;   // 事件处理器：键是事件类型
 ```
 
 三个要点：
@@ -106,6 +109,7 @@ export type ChannelAdapter<TCtx extends ChannelAdapterContext<any> = ChannelAdap
 **二、`deliver` 可以改写 harness 看到的输入。**
 
 ```ts
+// 三种返回：StepInput 表示自己投影、void 表示走默认、Promise 支持异步
 deliver?(payload: DeliverPayload, ctx: TCtx): StepInput | void | Promise<StepInput | void>;
 ```
 
@@ -119,6 +123,7 @@ export async function callAdapterEventHandler(
   event: UnstampedMessageStreamEvent,
   ctx: ChannelAdapterContext,
 ): Promise<UnstampedMessageStreamEvent> {
+  // 需要等待时把 continuation token 挂进事件，适配器才能续跑
   const eventForHandler = withWaitingContinuationToken(event, ctx);
   const handler = adapter[event.type] as ((data, ctx) => void | Promise<void>) | undefined;
 
@@ -126,6 +131,7 @@ export async function callAdapterEventHandler(
     try {
       await handler("data" in eventForHandler ? eventForHandler.data : undefined, ctx);
     } catch (error) {
+      // 适配器抛错只记日志：事件流不能因为某个平台出错就中断
       log.error("adapter event handler threw — event swallowed", {
         adapterKind: getAdapterKind(adapter),
         eventType: event.type,
@@ -149,9 +155,10 @@ export async function callAdapterEventHandler(
 `ctx.to()` 让一个通道往另一个通道发消息：
 
 ```ts
+// 跨通道投递的类型：目标地址由通道自己声明，调用方传错会在编译期报错
 export type CrossChannelToFn = <TChannel extends ChannelReference<unknown>>(
   channel: TChannel,
-  target: InferReceiveTarget<TChannel>,
+  target: InferReceiveTarget<TChannel>,   // 平台地址，由通道自己定义
 ) => CrossChannelTargetHandle;
 
 export interface CrossChannelTargetHandle {
@@ -164,6 +171,7 @@ export interface CrossChannelTargetHandle {
 ```ts
 // 在 HTTP 通道的某个路由里，把结果推到 Slack
 const slack = to(slackChannel, { channelId: "C0123" });
+// 跨通道投递要显式给 auth：这里的调用者不是终端用户
 await slack.send("巡检完成，3 个实例异常", { auth: null });
 ```
 
@@ -176,6 +184,7 @@ export function toCrossChannelTargets(
   channels: readonly ResolvedChannelDefinition[],
 ): readonly CrossChannelTarget[] {
   return channels.flatMap((channel) =>
+    // 没有 definition 的通道（框架内部通道）不暴露给 to()
     channel.definition === undefined ? [] : [{ ... }],
   );
 }
@@ -248,8 +257,10 @@ export default defineChannel({
   routes: [
     POST("/webhook", async (request, { attachSession }) => {
       const { text, sessionId } = (await request.json()) as { text: string; sessionId?: string };
+      // 没带 sessionId 就新建一个：attachSession 不校验会话是否存在
       const session = attachSession(sessionId ?? crypto.randomUUID());
       await session.send(text, { auth: null });
+      // 202 表示已受理，回复稍后从事件流来
       return Response.json({ ok: true, sessionId: session.id }, { status: 202 });
     }),
   ],

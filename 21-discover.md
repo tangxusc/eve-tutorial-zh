@@ -19,9 +19,13 @@
 ```ts
 // packages/eve/src/discover/discover-agent.ts
 export async function discoverAgent(input: DiscoverAgentInput): Promise<DiscoverAgentResult> {
+  // source 可替换：磁盘、内存、测试桩实现同一个接口
   const source = input.source ?? createDiskProjectSource();
+
+  // 两个根先 resolve：后面所有 logicalPath 都相对它们计算
   const appRoot = resolve(input.appRoot);
   const agentRoot = resolve(input.agentRoot);
+  // role 决定用哪套槽位规则：agent 还是 subagent
   const role = input.role ?? "agent";
   // ...
 }
@@ -33,6 +37,7 @@ export async function discoverAgent(input: DiscoverAgentInput): Promise<Discover
 
 ```ts
 // packages/eve/src/discover/manifest.ts
+// 一个槽位一个数组：槽位为空就是空数组，下游不用判 undefined
 export interface AgentSourceManifest {
   agentId: string;
   agentRoot: string;
@@ -50,7 +55,9 @@ export interface AgentSourceManifest {
   skills: SkillSourceRef[];
   subagents: SubagentSourceRef[];
   tools: ModuleSourceRef[];
+  // 只有计数，明细在 .eve/discovery/diagnostics.json
   diagnosticsSummary: { errors: number; warnings: number };
+  // kind + version 是产物契约：读取方先校验这两个字段
   kind: "eve-agent-discovery-manifest";
   version: 15;
 }
@@ -71,10 +78,12 @@ export function classifyAgentRootEntry(
   entryType: DirectoryEntryType,
 ): AgentRootEntryKind {
   if (entryType === "file") {
+    // 模块槽位：agent.ts / agent.js / agent.mts 都算，比的是去掉扩展名后的基名
     if (matchesSupportedModuleBaseName(name, "agent")) {
       return "agent-config-module";
     }
 
+    // markdown 槽位用 toLowerCase 比较：INSTRUCTIONS.MD 也识别（历史兼容）
     if (name.toLowerCase() === "instructions.md") {
       return "instructions-markdown";
     }
@@ -84,10 +93,12 @@ export function classifyAgentRootEntry(
   }
 
   if (entryType === "directory") {
+    // .eve、node_modules 这类生成目录先排除，避免递归扫进去
     if (GENERATED_AGENT_DIRECTORY_NAMES.has(name)) {
       return "ignored-directory";
     }
 
+    // 目录槽位是精确匹配：大小写错了就落到 unknown
     if (name === "channels") {
       return "channels-directory";
     }
@@ -138,6 +149,7 @@ Ignoring unsupported directory "foo/" in the agent root.
 
 ```ts
 // packages/eve/src/discover/filesystem.ts:7
+// 六种扩展名都算「作者写的模块」。.d.ts 不在里面，由 isTypeScriptDeclarationFileName 单独排除
 export const SUPPORTED_AUTHORED_MODULE_FILE_EXTENSIONS = [
   ".cts",
   ".mts",
@@ -153,8 +165,11 @@ export const SUPPORTED_AUTHORED_MODULE_FILE_EXTENSIONS = [
 光有扩展名还不够，还有一套排除规则：
 
 ```ts
+// .d.ts 只是类型声明，不是可加载模块：先排除，否则 tools/foo.d.ts 会被当成工具
 export function getSupportedModuleBaseName(name: string): string | null {
   if (isTypeScriptDeclarationFileName(name)) return null;   // .d.ts / .d.cts / .d.mts
+
+  // 按后缀剥掉扩展名，剩下的就是槽位名
   for (const extension of SUPPORTED_AUTHORED_MODULE_FILE_EXTENSIONS) {
     if (name.endsWith(extension) && name.length > extension.length) {
       return name.slice(0, -extension.length);
@@ -163,6 +178,7 @@ export function getSupportedModuleBaseName(name: string): string | null {
   return null;
 }
 
+// 测试文件不参与发现：__tests__/ 目录和 *.test.ts / *.spec.ts 都跳过
 export function isAuthoredTestPath(path: string): boolean {
   return /(?:^|[/\\])__tests__(?:[/\\]|$)/.test(path) || /\.(?:test|spec)\.[cm]?[jt]s$/.test(path);
 }
@@ -188,12 +204,15 @@ export async function discoverNamedSourceDirectory(input): Promise<{
   sources: (MarkdownSourceRef<TDefinition> | ModuleSourceRef)[];
 }> {
   const directoryPath = join(input.rootPath, input.directoryName);
+  // 用已经读到的目录项查，不额外 stat：一次扫描只做一轮磁盘 IO
   const directoryEntry = input.rootEntries.find((entry) => entry.name === input.directoryName);
 
+  // 目录不存在不是错误：槽位本来就是可选的
   if (directoryEntry === undefined) {
     return { diagnostics: [], sources: [] };
   }
 
+  // 存在但不是目录：报 error 诊断，这个槽位整体作废
   if (!directoryEntry.isDirectory()) {
     return {
       diagnostics: [
@@ -230,10 +249,12 @@ export async function discoverNamedSourceDirectory(input): Promise<{
 const toolsResult = await discoverNamedSourceDirectory({
   directoryName: "tools",
   invalidDirectoryCode: DISCOVER_TOOLS_DIRECTORY_INVALID,
+  // tools/ 递归：子目录会压平成工具名的一部分（上面注释写的是 flat，以这个调用为准）
   recursive: true,
   rootEntries,
   rootPath: agentRoot,
   source,
+  // 每一段路径都过命名校验，非法名字在这里变成诊断，而不是留到编译期
   validateSegment: createToolNameDiagnostic,
 });
 ```
@@ -248,6 +269,7 @@ const toolsResult = await discoverNamedSourceDirectory({
 
 ```ts
 // packages/eve/src/discover/grammar.ts
+// 工具名规则：字母开头，只允许字母、数字、下划线、连字符，最长 64
 export const TOOL_SLUG_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 ```
 
@@ -257,9 +279,10 @@ export const TOOL_SLUG_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
 ```ts
 // packages/eve/src/compiler/normalize-tool.ts:53
+// logicalPath 是相对 agent/ 的路径，比如 tools/redis/overview.ts
 const toolName = stripLogicalPathExtension(source.logicalPath)
-  .replace(/^tools\//, "")
-  .replaceAll("/", "-");
+  .replace(/^tools\//, "")     // 去掉槽位前缀
+  .replaceAll("/", "-");       // 子目录压平成连字符：redis-overview
 ```
 
 所以：
@@ -277,6 +300,7 @@ const toolName = stripLogicalPathExtension(source.logicalPath)
 同一个 `normalize-tool.ts` 里还有命名空间检查：
 
 ```ts
+// 命名空间检查：只保留 eve 和 eve__ 前缀，其余名字作者随便用
 const reservation = eveNamespaceReservation(toolName);
 if (reservation !== undefined) {
   throw new Error(`Tool "${source.logicalPath}" uses the reserved name "${toolName}". ...`);
@@ -290,6 +314,7 @@ if (reservation !== undefined) {
 const EVE_NAMESPACE = "eve";
 
 export function eveNamespaceReservation(name: string): string | undefined {
+  // 只拦 eve 本身和 eve__ 前缀；evefoo、my_eve 都不算
   return name === EVE_NAMESPACE || name.startsWith(`${EVE_NAMESPACE}__`)
     ? `eve reserves the "${EVE_NAMESPACE}" namespace for its built-in tools`
     : undefined;
@@ -301,11 +326,12 @@ export function eveNamespaceReservation(name: string): string | undefined {
 **用默认工具的名字不会报错，会覆盖它。** 覆盖规则在 `source-graph.ts` 的层级优先级里：
 
 ```ts
+// 四层优先级，数字大的赢：application 永远压过框架默认
 const LAYER_PRECEDENCE: Readonly<Record<AgentSourceLayer, number>> = {
-  "framework-default": 0,
-  "extension-package": 1,
-  "extension-override": 2,
-  application: 3,
+  "framework-default": 0,   // eve 自带的 bash、read_file
+  "extension-package": 1,   // 扩展包提供的
+  "extension-override": 2,  // 扩展包里的覆盖
+  application: 3,           // 项目自己写的
 };
 ```
 
@@ -317,6 +343,7 @@ const LAYER_PRECEDENCE: Readonly<Record<AgentSourceLayer, number>> = {
 
 ```ts
 // packages/eve/src/discover/named-source-directory.ts · collectLeafSources()
+// markdown 和模块同时存在：报冲突，然后 continue——这个槽位一个都不留
 if (candidates.markdownFileName !== undefined && candidates.moduleFileNames.length > 0) {
   input.diagnostics.push(
     createSlotCollisionDiagnostic(absoluteDirectory, slotLogicalPath, [
@@ -327,6 +354,7 @@ if (candidates.markdownFileName !== undefined && candidates.moduleFileNames.leng
   continue;   // ← 这个 slot 没了
 }
 
+// 多个模块文件（read_logs.ts 和 read_logs.js）同样整槽作废，不是二选一
 if (candidates.moduleFileNames.length > 1) {
   input.diagnostics.push(
     createModuleSlotCollisionDiagnostic(absoluteDirectory, slotLogicalPath, candidates.moduleFileNames),
@@ -353,9 +381,11 @@ if (candidates.moduleFileNames.length > 1) {
 ```ts
 // packages/eve/src/compiler/compile-agent.ts:152
 function finishAgentCompilation(result, createError): CompileAgentResult {
+  // 只要有一条 error 就整体失败，不产出「半个」编译结果
   if (result.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
     throw createError(result);
   }
+  // warning 只打印，不阻塞编译
   reportDiscoverWarnings(result.diagnostics);
   return result;
 }
@@ -451,6 +481,7 @@ export function classifyLocalSubagentEntry(
 ): LocalSubagentEntryKind {
   // ... 文件槽位与 classifyAgentRootEntry 相同
   // ... 目录槽位少了 channels 和 instrumentation
+  // 子代理不能有自己的定时任务：单独给一个「非法目录」类型，好出精确诊断
   if (name === "schedules") {
     return "invalid-schedules-directory";
   }

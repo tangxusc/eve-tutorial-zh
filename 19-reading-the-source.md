@@ -39,6 +39,7 @@ import{Command,CommanderError}from"#compiled/commander/index.js";import{agentCom
 
 ```ts
 // node_modules/eve/dist/src/internal/logging.d.ts
+// 只有类型和 JSDoc，没有函数体——发布包里可读性最好的一层
 /**
  * Framework-internal structured logger.
  *
@@ -77,6 +78,8 @@ git checkout eve@0.81.1
 
 ```ts
 // packages/eve/src/eve-channel/index.ts:1
+// 五个 import 对应五个子系统：工具桩、workflow 运行时、流式响应头、路由前缀。
+// 读一个模块的 import，就知道它跨了哪些层。
 import { InvalidToolStubTargetError } from "#tool-stubs/validate-targets.js";
 import { readStubFailure, readMatchedStubRules } from "#execution/tool-stubs/steps.js";
 import { getRun } from "#internal/workflow/runtime.js";
@@ -174,8 +177,11 @@ eve 的目录不是按功能分的，是按执行时机分的：
 日志阈值在 `src/internal/logging.ts:257` 的 `resolveThreshold()`：
 
 ```ts
+// 每次写日志都现读环境变量：改了级别不用重启，代价是每条日志多一次 getenv
 function resolveThreshold(): number {
   const configured = process.env.EVE_LOG_LEVEL?.toLowerCase();
+
+  // 只认这四个值。拼错（比如写成 EVE_LOG=debug）不报错，静默落回 info
   if (
     configured === "debug" ||
     configured === "info" ||
@@ -184,6 +190,8 @@ function resolveThreshold(): number {
   ) {
     return LEVEL_SEVERITY[configured];
   }
+
+  // 未设置时的默认值：info 及以上才输出，debug 默认关
   return LEVEL_SEVERITY.info;
 }
 ```
@@ -193,12 +201,18 @@ function resolveThreshold(): number {
 ```ts
 // src/internal/logging.ts:308
 function write(level: LogLevel, namespace: string, message: string, fields?: LogFields): void {
+  // 低于阈值直接返回：过滤发生在拼字符串之前，被关掉的日志几乎不花钱
   if (LEVEL_SEVERITY[level] < resolveThreshold()) {
     return;
   }
   // ...
+  // 按级别选输出流：error 走 stderr，其余走 stdout，方便分开重定向
   const sink = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+
+  // 固定前缀 [eve:命名空间]，所以 grep "eve:channel" 能捞出整条链路
   const line = `[eve:${namespace}] ${message}`;
+
+  // 没有结构化字段就只打一行；有字段时作为第二个参数交给 console
   if (fields === undefined) {
     sink(line);
     return;
@@ -279,12 +293,14 @@ node --inspect-brk node_modules/eve/bin/eve.js dev
 
 ```ts
 // src/channel/adapter.test.ts
+// 测试名就是行为契约：可选字段、返回值必须是 Buffer。
 describe("ChannelAdapter (fetchFile field)", () => {
   it("treats the fetchFile field as optional", () => {
     const adapter: ChannelAdapter = { kind: "noop" };
     expect(adapter.fetchFile).toBeUndefined();
   });
 
+  // 自定义通道实现 fetchFile 时，入参只有 url，返回值必须是 Buffer 而不是流
   it("accepts a fetchFile function that returns a Buffer", async () => {
     const adapter: ChannelAdapter = {
       kind: "custom",

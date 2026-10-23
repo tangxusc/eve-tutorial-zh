@@ -19,13 +19,17 @@
 ```ts
 // packages/eve/src/compiler/compile-agent.ts:79
 export async function compileAgent(input: CompileAgentInput = {}): Promise<CompileAgentResult> {
+  // 第一步永远是重新发现：编译不信任上一次留下的 discovery 产物
   const discovered = await discoverAgentForCompilation(input);
+
+  // 读写都在 .eve/ 下；两个 root 分开是为了支持「先写临时目录、再发布」
   const artifactsRoot = join(discovered.project.appRoot, ".eve");
   const result = await writeAgentCompilation(discovered, {
     publishedRoot: artifactsRoot,
     writeRoot: artifactsRoot,
   });
 
+  // 有一条 error 就在这里抛；产物仍留在磁盘上供排查
   return finishAgentCompilation(result, CompileAgentError.fromDurableArtifacts);
 }
 ```
@@ -37,9 +41,11 @@ export async function compileAgent(input: CompileAgentInput = {}): Promise<Compi
 ```ts
 // packages/eve/src/compiler/artifacts.ts:130
 function resolveCompilerArtifactPathsAt(appRoot, artifactsRoot): CompilerArtifactPaths {
+  // 两个目录：discovery 放扫描结果，compile 放编译产物
   const discoveryDirectoryPath = join(resolvedArtifactsRoot, "discovery");
   const compileDirectoryPath = join(resolvedArtifactsRoot, "compile");
 
+  // 所有路径只在这里算一次，其他模块从这里取，避免各写各的相对路径
   return {
     appRoot: resolvedAppRoot,
     compiledManifestPath: join(compileDirectoryPath, "compiled-agent-manifest.json"),
@@ -74,14 +80,19 @@ function resolveCompilerArtifactPathsAt(appRoot, artifactsRoot): CompilerArtifac
 export async function writeCompilerArtifacts(
   input: WriteCompilerArtifactsInput,
 ): Promise<WriteCompilerArtifactsResult> {
+  // 写位置和发布位置分别解析：两者可以不同
   const paths = resolveCompilerArtifactPathsAt(input.appRoot, input.artifactLocations.writeRoot);
   const publishedPaths = resolveCompilerArtifactPathsAt(
     input.appRoot,
     input.artifactLocations.publishedRoot,
   );
+
+  // discovery 的诊断挂到根节点下，稍后整体写进 diagnostics.json
   const diagnostics = input.diagnostics.map((diagnostic) =>
     projectDiscoverDiagnostic(diagnostic, ROOT_COMPILED_AGENT_NODE_ID),
   );
+
+  // 先编译 manifest，再把 workspace 资源和技能文件复制进编译目录
   const compiledManifest = await materializeWorkspaceResources({
     compileDirectoryPath: paths.compileDirectoryPath,
     manifest: await compileAgentManifest(input.manifest, {
@@ -123,6 +134,7 @@ export async function writeCompilerArtifacts(
 
 ```ts
 // packages/eve/src/compiler/source-graph.ts:262
+// 第一维：谁提供的。数字大的赢
 const LAYER_PRECEDENCE: Readonly<Record<AgentSourceLayer, number>> = {
   "framework-default": 0,
   "extension-package": 1,
@@ -130,6 +142,7 @@ const LAYER_PRECEDENCE: Readonly<Record<AgentSourceLayer, number>> = {
   application: 3,
 };
 
+// 第二维：同一层内，直接声明的赢过从目录结构推导出来的
 const FORM_PRECEDENCE: Readonly<Record<AgentSourceForm, number>> = {
   derived: 0,
   direct: 1,
@@ -148,6 +161,7 @@ const FORM_PRECEDENCE: Readonly<Record<AgentSourceForm, number>> = {
 同层同槽位有两个候选会怎样？直接报错：
 
 ```ts
+// 同一个 slot 不允许出现「同层同形态」的两个候选：那是作者写重了，直接报错
 for (const candidate of slotCandidates) {
   const precedence = `${candidate.layer}:${candidate.form}`;
   if (seenPrecedence.has(precedence)) {
@@ -162,6 +176,7 @@ for (const candidate of slotCandidates) {
 选完赢家，输家不会被丢掉，而是记一条 `shadowed`：
 
 ```ts
+// 排完序取第一个，其余全部记成 shadowed：被覆盖不是错误，但要看得见
 const winner = ordered[0]!;
 selected.set(slot, winner);
 
@@ -169,7 +184,7 @@ for (const loser of ordered.slice(1)) {
   entries.push({
     kind: "shadowed",
     source: describeAgentSourceCandidate(loser),
-    winnerSourceId: winner.sourceId,
+    winnerSourceId: winner.sourceId,   // 指向赢家，能回答「谁把它盖掉了」
   });
 }
 ```
@@ -183,16 +198,21 @@ for (const loser of ordered.slice(1)) {
 ```ts
 // packages/eve/src/compiler/normalize-manifest.ts:172
 async compileStaticNode(input: NodeCompileInput): Promise<CompiledLocalNodeResult> {
+  // 第一阶段：选候选、算依赖，不执行任何用户代码
   const phaseOne = await this.createPhaseOneNodeSourceState(input, input.inheritedExternalDependencies);
   let config = await compileAgentConfig(input.manifest, this.context, {
     binding: phaseOne.selectedConfig.binding,
     definition: phaseOne.selectedConfig.definition,
     source: phaseOne.selectedConfig.source,
   });
+
+  // 有些配置只允许出现在根节点，子代理里写了直接报错
   assertRootOnlyConfig(config, input.isRoot, input.manifest.agentId);
+  // 工具策略两层：先叠作者写的覆盖规则，再叠框架默认
   applyAgentToolPolicy(phaseOne, config);
   applyDefaultToolPolicy(phaseOne, config);
 
+  // 第二阶段：定稿依赖集合、标出运行期入口、复制资源、递归编译子节点
   const externalDependencies = mergeExternalDependencies(...);
   const state = finalizeNodeSourceState(phaseOne, externalDependencies);
   markConfigRuntimeEntries(config, state.evaluation);
@@ -224,8 +244,10 @@ async compileStaticNode(input: NodeCompileInput): Promise<CompiledLocalNodeResul
 ```ts
 // packages/eve/src/compiler/module-map.ts:60
 export function createCompiledModuleMapSource(input: CreateCompiledModuleMapSourceInput): string {
+  // 生成的是源码文本，不是对象：产物要能被 Node 直接 import
   const importSpecifierStyle = input.importSpecifierStyle ?? "relative";
   let index = 0;
+  // 只要有一个模块走 programmatic loader，产物顶部就要引入那个 loader
   let usesProgrammaticLoader = false;
   const scopes: RenderedNodeScope[] = collectBoundNodeScopes(input.manifest).map((scope) => {
     // ... 每个 binding 生成一个 module_N
@@ -236,10 +258,11 @@ export function createCompiledModuleMapSource(input: CreateCompiledModuleMapSour
 
 ```ts
 if (binding.backing.kind === "filesystem") {
+  // 用户代码：静态 import，路径相对产物文件算
   const specifier = /* 相对路径 */;
   // → import * as imported_module_N from "../../agent/tools/read_logs.ts"
 } else {
-  // backing.kind === "programmatic"
+  // backing.kind === "programmatic"：框架默认能力没有稳定路径，只能按 id 取
   usesProgrammaticLoader = true;
   // → const module_N = await loadProgrammaticModule({ kind: "programmatic", ... })
 }
@@ -249,13 +272,17 @@ if (binding.backing.kind === "filesystem") {
 
 ```js
 // .eve/compile/module-map.mjs
+// 两种加载方式并存：用户代码静态 import，框架默认能力走 loader
 import { loadFrameworkProgrammaticModule as loadProgrammaticModule, memoizeModuleNamespaceFactories } from "eve/internal/programmatic-source-loader";
 import * as imported_module_0 from "../../agent/channels/eve.ts";
 
+// 用户模块包一层 memoize：无参工厂只算一次
 const module_0 = memoizeModuleNamespaceFactories(imported_module_0);
+// 框架模块按 registryId + moduleId 取，revision 锁版本
 const module_1 = await loadProgrammaticModule({"kind":"programmatic","moduleId":"sandbox.ts","registryId":"eve:defaults","revision":"eve@0.81.1:compiled-manifest-v53","semanticRevision":"eve:default-sandbox:v1"}, Object.freeze({}));
 const module_2 = await loadProgrammaticModule({"kind":"programmatic","moduleId":"tools/bash.ts","registryId":"eve:defaults","revision":"eve@0.81.1:compiled-manifest-v53"}, Object.freeze({}));
 
+// 三层索引：节点 → 槽位路径 → 模块命名空间
 export const moduleMap = Object.freeze({
   "nodes": Object.freeze({
     "__root__": Object.freeze({
@@ -284,13 +311,17 @@ export function memoizeModuleNamespaceFactories(namespace): ProgrammaticModuleNa
   return Object.freeze(
     Object.fromEntries(
       Object.entries(namespace).map(([exportName, exportValue]) => {
+        // 非函数原样保留
         if (typeof exportValue !== "function") return [exportName, exportValue];
+
         let invocation: Promise<unknown> | undefined;
         const memoized = new Proxy(exportValue, {
           apply(target, thisArgument, argumentsList) {
+            // 带参数的调用每次都执行：参数不同，结果本来就该不同
             if (argumentsList.length > 0) {
               return Reflect.apply(target, thisArgument, argumentsList);
             }
+            // 无参调用只算第一次；缓存的是 Promise，并发调用也只执行一次
             invocation ??= Promise.resolve().then(() =>
               Reflect.apply(target, thisArgument, argumentsList),
             );
@@ -314,6 +345,7 @@ export function memoizeModuleNamespaceFactories(namespace): ProgrammaticModuleNa
 // packages/eve/src/compiler/artifacts.ts:170
 export function createCompileMetadata(input): CompileMetadata {
   const generator = resolveInstalledPackageInfo();
+  // 四个产物各算一个 hash，拼起来再算 sourceGraphHash
   const compiledManifestHash = createContentHash(input.compiledManifestJson);
   const discoveryManifestHash = createContentHash(input.discoveryManifestJson);
   const diagnosticsHash = createContentHash(input.diagnosticsArtifactJson);
@@ -327,6 +359,7 @@ export function createCompileMetadata(input): CompileMetadata {
     discovery: {
       diagnostics: { path: ..., sha256: diagnosticsHash },
       manifest: { path: ..., sha256: discoveryManifestHash },
+      // 四项一起算：任何一个变了，整张 source graph 就算变了
       sourceGraphHash: createContentHash(
         `${compiledManifestHash}:${discoveryManifestHash}:${diagnosticsHash}:${moduleMapHash}`,
       ),
@@ -334,6 +367,7 @@ export function createCompileMetadata(input): CompileMetadata {
     },
     generator: { name: generator.name, version: generator.version },
     kind: "eve-compile-metadata",
+    // 有 error 也照样写文件，只是标成 failed：文件存在不等于编译成功
     status: input.diagnosticsSummary.errors > 0 ? "failed" : "ready",
     version: 6,
   };
@@ -378,12 +412,14 @@ export function createCompileMetadata(input): CompileMetadata {
 export async function stageDevelopmentRuntimeArtifactsSnapshot(
   compileResult: CompileAgentResult,
 ): Promise<DevelopmentRuntimeArtifactsSnapshot> {
+  // 目录名 = 时间戳(36 进制) + uuid：天然按时间排序，也不会撞
   const snapshotRoot = join(
     resolveDevelopmentRuntimeArtifactsSnapshotsDirectory(compileResult.project.appRoot),
     `${Date.now().toString(36)}-${randomUUID()}`,
   );
   const sourceSnapshotPlan = await createDevelopmentSourceSnapshotPlan({ ... });
 
+  // 复制源码 → 挂框架包 → 挂扩展依赖 → 复制编译产物 → 改写 manifest 里的绝对路径 → 校验
   await copyDevelopmentSourceSnapshot(sourceSnapshotPlan);
   await mountFrameworkPackage(sourceSnapshotPlan.runtimeAppRoot);
   await mountExtensionExternalDependencies({ ... });
